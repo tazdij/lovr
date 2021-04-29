@@ -4,6 +4,7 @@
 #include "graphics/graphics.h"
 #include "graphics/canvas.h"
 #include "graphics/texture.h"
+#include "core/os.h"
 #include "core/util.h"
 #include <stdlib.h>
 #include <math.h>
@@ -49,7 +50,10 @@
 #define XR_INIT(f) if (XR_FAILED(f)) return openxr_destroy(), false;
 #define SESSION_ACTIVE(s) (s >= XR_SESSION_STATE_READY && s <= XR_SESSION_STATE_FOCUSED)
 #define GL_SRGB8_ALPHA8 0x8C43
+#define GL_DEPTH24_STENCIL8 0x88F0
 #define MAX_IMAGES 4
+
+enum { COLOR, DEPTH };
 
 #if defined(_WIN32)
 HANDLE os_get_win32_window(void);
@@ -85,6 +89,7 @@ EGLConfig os_get_egl_config(void);
   X(xrDestroySpace)\
   X(xrEnumerateViewConfigurations)\
   X(xrEnumerateViewConfigurationViews)\
+  X(xrEnumerateSwapchainFormats)\
   X(xrCreateSwapchain)\
   X(xrDestroySwapchain)\
   X(xrEnumerateSwapchainImages)\
@@ -127,13 +132,14 @@ static struct {
   XrSpace referenceSpace;
   XrReferenceSpaceType referenceSpaceType;
   XrSpace spaces[MAX_DEVICES];
-  XrSwapchain swapchain;
+  XrSwapchain swapchain[2];
   XrCompositionLayerProjection layers[1];
   XrCompositionLayerProjectionView layerViews[2];
+  XrCompositionLayerDepthInfoKHR depthLayers[2];
   XrFrameState frameState;
   Canvas* canvases[MAX_IMAGES];
-  uint32_t imageIndex;
-  uint32_t imageCount;
+  uint32_t imageIndex[2];
+  uint32_t imageCount[2];
   uint32_t msaa;
   uint32_t width;
   uint32_t height;
@@ -144,6 +150,7 @@ static struct {
   XrPath actionFilters[2];
   XrHandTrackerEXT handTrackers[2];
   struct {
+    bool depthSubmission;
     bool handTracking;
     bool overlay;
   } features;
@@ -171,6 +178,8 @@ static void openxr_destroy();
 
 static bool openxr_init(float supersample, float offset, uint32_t msaa, bool overlay) {
   state.msaa = msaa;
+  state.clipNear = .1f;
+  state.clipFar = 100.f;
 
 #ifdef __ANDROID__
   static PFN_xrInitializeLoaderKHR xrInitializeLoaderKHR;
@@ -199,7 +208,7 @@ static bool openxr_init(float supersample, float offset, uint32_t msaa, bool ove
     for (uint32_t i = 0; i < extensionCount; i++) extensions[i].type = XR_TYPE_EXTENSION_PROPERTIES;
     xrEnumerateInstanceExtensionProperties(NULL, 32, &extensionCount, extensions);
 
-    const char* enabledExtensionNames[5];
+    const char* enabledExtensionNames[6];
     uint32_t enabledExtensionCount = 0;
 
 #ifdef __ANDROID__
@@ -207,6 +216,11 @@ static bool openxr_init(float supersample, float offset, uint32_t msaa, bool ove
 #endif
 
     enabledExtensionNames[enabledExtensionCount++] = GRAPHICS_EXTENSION;
+
+    if (hasExtension(extensions, extensionCount, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME)) {
+      enabledExtensionNames[enabledExtensionCount++] = XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME;
+      state.features.depthSubmission = true;
+    }
 
     if (hasExtension(extensions, extensionCount, XR_EXT_HAND_TRACKING_EXTENSION_NAME)) {
       enabledExtensionNames[enabledExtensionCount++] = XR_EXT_HAND_TRACKING_EXTENSION_NAME;
@@ -465,23 +479,44 @@ static bool openxr_init(float supersample, float offset, uint32_t msaa, bool ove
     TextureType textureType = TEXTURE_2D;
     uint32_t width = state.width * 2;
     uint32_t arraySize = 1;
-    XrSwapchainImageOpenGLKHR images[MAX_IMAGES];
+    XrSwapchainImageOpenGLKHR images[2][MAX_IMAGES];
     for (uint32_t i = 0; i < MAX_IMAGES; i++) {
-      images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR;
-      images[i].next = NULL;
+      images[COLOR][i].type = images[DEPTH][i].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR;
+      images[COLOR][i].next = images[DEPTH][i].next = NULL;
     }
 #elif defined(XR_USE_GRAPHICS_API_OPENGL_ES)
     TextureType textureType = TEXTURE_ARRAY;
     uint32_t width = state.width;
     uint32_t arraySize = 2;
-    XrSwapchainImageOpenGLESKHR images[MAX_IMAGES];
+    XrSwapchainImageOpenGLKHR images[2][MAX_IMAGES];
     for (uint32_t i = 0; i < MAX_IMAGES; i++) {
-      images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR;
-      images[i].next = NULL;
+      images[COLOR][i].type = images[DEPTH][i].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR;
+      images[COLOR][i].next = images[DEPTH][i].next = NULL;
     }
 #endif
 
-    XrSwapchainCreateInfo info = {
+    int64_t formats[32];
+    uint32_t formatCount;
+    XR_INIT(xrEnumerateSwapchainFormats(state.session, 32, &formatCount, formats));
+    bool supportsColor = false;
+    bool supportsDepth = false;
+    for (uint32_t i = 0; i < formatCount; i++) {
+      switch (formats[i]) {
+        case GL_SRGB8_ALPHA8: supportsColor = true; break;
+        case GL_DEPTH24_STENCIL8: supportsDepth = true; break;
+        default: break;
+      }
+    }
+
+    if (!supportsColor) {
+      return openxr_destroy(), false;
+    }
+
+    if (!supportsDepth) {
+      state.features.depthSubmission = false;
+    }
+
+    XrSwapchainCreateInfo colorInfo = {
       .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
       .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT,
       .format = GL_SRGB8_ALPHA8,
@@ -493,12 +528,35 @@ static bool openxr_init(float supersample, float offset, uint32_t msaa, bool ove
       .mipCount = 1
     };
 
-    XR_INIT(xrCreateSwapchain(state.session, &info, &state.swapchain));
-    XR_INIT(xrEnumerateSwapchainImages(state.swapchain, MAX_IMAGES, &state.imageCount, (XrSwapchainImageBaseHeader*) images));
+    XR_INIT(xrCreateSwapchain(state.session, &colorInfo, &state.swapchain[COLOR]));
+    XR_INIT(xrEnumerateSwapchainImages(state.swapchain[COLOR], MAX_IMAGES, &state.imageCount[COLOR], (XrSwapchainImageBaseHeader*) images[COLOR]));
+
+    if (state.features.depthSubmission) {
+      XrSwapchainCreateInfo depthInfo = {
+        .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+        .usageFlags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .format = GL_DEPTH24_STENCIL8,
+        .width = width,
+        .height = state.height,
+        .sampleCount = 1,
+        .faceCount = 1,
+        .arraySize = arraySize,
+        .mipCount = 1
+      };
+
+      XR_INIT(xrCreateSwapchain(state.session, &depthInfo, &state.swapchain[DEPTH]));
+      XR_INIT(xrEnumerateSwapchainImages(state.swapchain[DEPTH], MAX_IMAGES, &state.imageCount[DEPTH], (XrSwapchainImageBaseHeader*) images[DEPTH]));
+
+      if (state.imageCount[COLOR] != state.imageCount[DEPTH]) {
+        xrDestroySwapchain(state.swapchain[DEPTH]);
+        state.features.depthSubmission = false;
+      }
+    }
 
     CanvasFlags flags = { .depth = { true, false, FORMAT_D24S8 }, .stereo = true, .mipmaps = false, .msaa = state.msaa };
-    for (uint32_t i = 0; i < state.imageCount; i++) {
-      Texture* texture = lovrTextureCreateFromHandle(images[i].image, textureType, arraySize, state.msaa);
+    for (uint32_t i = 0; i < state.imageCount[COLOR]; i++) {
+      //flags.depth.handle = images[DEPTH][i].image; // TODO
+      Texture* texture = lovrTextureCreateFromHandle(images[COLOR][i].image, textureType, arraySize, state.msaa);
       state.canvases[i] = lovrCanvasCreate(state.width, state.height, flags);
       lovrCanvasSetAttachments(state.canvases[i], &(Attachment) { texture, 0, 0 }, 1);
       lovrRelease(texture, lovrTextureDestroy);
@@ -523,7 +581,7 @@ static bool openxr_init(float supersample, float offset, uint32_t msaa, bool ove
     // Pre-init composition layer views
     state.layerViews[0] = (XrCompositionLayerProjectionView) {
       .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
-      .subImage = { state.swapchain, { { 0, 0 }, { state.width, state.height } }, 0 }
+      .subImage = { state.swapchain[COLOR], { { 0, 0 }, { state.width, state.height } }, 0 }
     };
 
     // Copy the left view to the right view and offset either the viewport or array index
@@ -533,10 +591,24 @@ static bool openxr_init(float supersample, float offset, uint32_t msaa, bool ove
 #elif defined(XR_USE_GRAPHICS_API_OPENGL_ES)
     state.layerViews[1].subImage.imageArrayIndex = 1;
 #endif
-  }
 
-  state.clipNear = .1f;
-  state.clipFar = 100.f;
+    // If depth submission is active, add depth info to submitted layers
+    if (state.features.depthSubmission) {
+      for (uint32_t i = 0; i < 2; i++) {
+        state.layerViews[i].next = &state.depthLayers[i];
+        state.depthLayers[i] = (XrCompositionLayerDepthInfoKHR) {
+          .type = XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR,
+          .subImage.swapchain = state.swapchain[DEPTH],
+          .subImage.imageRect = state.layerViews[i].subImage.imageRect,
+          .subImage.imageArrayIndex = state.layerViews[i].subImage.imageArrayIndex,
+          .minDepth = 0.f,
+          .maxDepth = 1.f,
+          .nearZ = state.clipNear,
+          .farZ = state.clipFar
+        };
+      }
+    }
+  }
 
   state.frameState.type = XR_TYPE_FRAME_STATE;
   os_window_set_vsync(0);
@@ -545,7 +617,7 @@ static bool openxr_init(float supersample, float offset, uint32_t msaa, bool ove
 }
 
 static void openxr_destroy(void) {
-  for (uint32_t i = 0; i < state.imageCount; i++) {
+  for (uint32_t i = 0; i < state.imageCount[COLOR]; i++) {
     lovrRelease(state.canvases[i], lovrCanvasDestroy);
   }
 
@@ -564,7 +636,8 @@ static void openxr_destroy(void) {
   if (state.handTrackers[0]) xrDestroyHandTrackerEXT(state.handTrackers[0]);
   if (state.handTrackers[1]) xrDestroyHandTrackerEXT(state.handTrackers[1]);
   if (state.actionSet) xrDestroyActionSet(state.actionSet);
-  if (state.swapchain) xrDestroySwapchain(state.swapchain);
+  if (state.swapchain[COLOR]) xrDestroySwapchain(state.swapchain[COLOR]);
+  if (state.swapchain[DEPTH]) xrDestroySwapchain(state.swapchain[DEPTH]);
   if (state.referenceSpace) xrDestroySpace(state.referenceSpace);
   if (state.session) xrEndSession(state.session);
   if (state.instance) xrDestroyInstance(state.instance);
@@ -654,6 +727,8 @@ static void openxr_getClipDistance(float* clipNear, float* clipFar) {
 static void openxr_setClipDistance(float clipNear, float clipFar) {
   state.clipNear = clipNear;
   state.clipFar = clipFar;
+  state.depthLayers[0].nearZ = state.depthLayers[1].nearZ = clipNear;
+  state.depthLayers[0].farZ = state.depthLayers[1].farZ = clipFar;
 }
 
 static void openxr_getBoundsDimensions(float* width, float* depth) {
@@ -868,10 +943,13 @@ static void openxr_renderTo(void (*callback)(void*), void* userdata) {
   XR(xrBeginFrame(state.session, &beginInfo));
 
   if (state.frameState.shouldRender) {
-    XR(xrAcquireSwapchainImage(state.swapchain, NULL, &state.imageIndex));
+    XR(xrAcquireSwapchainImage(state.swapchain[COLOR], NULL, &state.imageIndex[COLOR]));
+    XR(xrAcquireSwapchainImage(state.swapchain[DEPTH], NULL, &state.imageIndex[DEPTH]));
     XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = 1e9 };
+    // TODO what if image indices don't match?  Our canvases are set up that way!
 
-    if (XR(xrWaitSwapchainImage(state.swapchain, &waitInfo)) != XR_TIMEOUT_EXPIRED) {
+    // TODO wait on depth image as well
+    if (XR(xrWaitSwapchainImage(state.swapchain[COLOR], &waitInfo)) != XR_TIMEOUT_EXPIRED) {
       uint32_t count;
       XrView views[2];
       getViews(views, &count);
@@ -890,7 +968,7 @@ static void openxr_renderTo(void (*callback)(void*), void* userdata) {
         lovrGraphicsSetProjection(eye, projection);
       }
 
-      lovrGraphicsSetBackbuffer(state.canvases[state.imageIndex], true, true);
+      lovrGraphicsSetBackbuffer(state.canvases[state.imageIndex[COLOR]], true, true);
       callback(userdata);
       lovrGraphicsSetBackbuffer(NULL, false, false);
 
@@ -901,7 +979,8 @@ static void openxr_renderTo(void (*callback)(void*), void* userdata) {
       state.layerViews[1].fov = views[1].fov;
     }
 
-    XR(xrReleaseSwapchainImage(state.swapchain, NULL));
+    XR(xrReleaseSwapchainImage(state.swapchain[COLOR], NULL));
+    XR(xrReleaseSwapchainImage(state.swapchain[DEPTH], NULL));
   }
 
   XR(xrEndFrame(state.session, &endInfo));
@@ -909,7 +988,7 @@ static void openxr_renderTo(void (*callback)(void*), void* userdata) {
 }
 
 static Texture* openxr_getMirrorTexture(void) {
-  Canvas* canvas = state.canvases[state.imageIndex];
+  Canvas* canvas = state.canvases[state.imageIndex[COLOR]];
   return canvas ? lovrCanvasGetAttachments(canvas, NULL)[0].texture : NULL;
 }
 

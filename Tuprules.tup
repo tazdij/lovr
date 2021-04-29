@@ -79,6 +79,7 @@ endif
 ## Linux
 ifeq ($(PLATFORM),linux)
   linux = y
+  CFLAGS += -DLOVR_LINUX_X11
   CFLAGS += -D_POSIX_C_SOURCE=200809L
   CFLAGS += -DLOVR_GL
   LDFLAGS += -lm -lpthread -ldl
