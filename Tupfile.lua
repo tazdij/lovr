@@ -195,7 +195,7 @@ else
   tup.rule('.obj/lua/*.o', '^ LD %o^ $(cc) $(base_flags) -o %o %f $(lua_lflags)', lib('lua'))
 end
 
-if target == 'win32' or target == 'macos' or target == 'linux' then
+if target == 'win32' or target == 'macos' then
   cflags += '-Ideps/glfw/include'
   lflags += '-lglfw'
 
