@@ -199,12 +199,12 @@ static void desktop_renderTo(void (*callback)(void*), void* userdata) {
 }
 
 static void desktop_update(float dt) {
-  bool front = os_is_key_down(KEY_W) || os_is_key_down(KEY_UP);
-  bool back = os_is_key_down(KEY_S) || os_is_key_down(KEY_DOWN);
-  bool left = os_is_key_down(KEY_A) || os_is_key_down(KEY_LEFT);
-  bool right = os_is_key_down(KEY_D) || os_is_key_down(KEY_RIGHT);
-  bool up = os_is_key_down(KEY_Q);
-  bool down = os_is_key_down(KEY_E);
+  bool front = os_is_key_down(OS_KEY_W) || os_is_key_down(OS_KEY_UP);
+  bool back = os_is_key_down(OS_KEY_S) || os_is_key_down(OS_KEY_DOWN);
+  bool left = os_is_key_down(OS_KEY_A) || os_is_key_down(OS_KEY_LEFT);
+  bool right = os_is_key_down(OS_KEY_D) || os_is_key_down(OS_KEY_RIGHT);
+  bool up = os_is_key_down(OS_KEY_Q);
+  bool down = os_is_key_down(OS_KEY_E);
 
   float movespeed = 3.f * dt;
   float turnspeed = 3.f * dt;
