@@ -65,11 +65,6 @@ static struct {
   float clipFar;
 } state;
 
-static void onFocus(bool focused) {
-  state.focused = focused;
-  lovrEventPush((Event) { .type = EVENT_FOCUS, .data.boolean = { focused } });
-}
-
 static bool simulator_init(HeadsetConfig* config) {
   state.config = *config;
   state.clipNear = .01f;
@@ -84,8 +79,7 @@ static bool simulator_init(HeadsetConfig* config) {
     state.initialized = true;
   }
 
-  state.focused = true;
-  os_on_focus(onFocus);
+  state.focused = os_window_is_focused();
 
   return true;
 }
@@ -500,7 +494,7 @@ static bool simulator_isVisible(void) {
 }
 
 static bool simulator_isFocused(void) {
-  return state.focused;
+  return os_window_is_focused();
 }
 
 static bool simulator_isMounted(void) {
@@ -511,6 +505,15 @@ static bool simulator_update(double* dt) {
   if (!state.active) {
     *dt = 0.;
     return true;
+  }
+
+  if (os_window_is_focused() != state.focused) {
+    state.focused = !state.focused;
+    lovrEventPush((Event) {
+      .type = EVENT_FOCUS,
+      .data.focus.focused = state.focused,
+      .data.focus.display = DISPLAY_HEADSET
+    });
   }
 
   double t = os_get_time() - state.epoch;

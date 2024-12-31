@@ -3752,13 +3752,17 @@ static bool openxr_update(double* dt) {
         bool wasVisible = state.sessionState >= XR_SESSION_STATE_VISIBLE;
         bool isVisible = event->state >= XR_SESSION_STATE_VISIBLE;
         if (wasVisible != isVisible) {
-          lovrEventPush((Event) { .type = EVENT_VISIBLE, .data.boolean.value = isVisible });
+          lovrEventPush((Event) { .type = EVENT_VISIBLE, .data.visible.visible = isVisible });
         }
 
         bool wasFocused = state.sessionState == XR_SESSION_STATE_FOCUSED;
         bool isFocused = event->state == XR_SESSION_STATE_FOCUSED;
         if (wasFocused != isFocused) {
-          lovrEventPush((Event) { .type = EVENT_FOCUS, .data.boolean.value = isFocused });
+          lovrEventPush((Event) {
+            .type = EVENT_FOCUS,
+            .data.focus.focused = isFocused,
+            .data.focus.display = DISPLAY_HEADSET
+          });
         }
 
         state.sessionState = event->state;
@@ -3780,7 +3784,7 @@ static bool openxr_update(double* dt) {
       case XR_TYPE_EVENT_DATA_USER_PRESENCE_CHANGED_EXT: {
         XrEventDataUserPresenceChangedEXT* event = (XrEventDataUserPresenceChangedEXT*) &e;
         state.mounted = event->isUserPresent;
-        lovrEventPush((Event) { .type = EVENT_MOUNT, .data.boolean.value = state.mounted });
+        lovrEventPush((Event) { .type = EVENT_MOUNT, .data.mount.mounted = state.mounted });
         break;
       }
       default: break;

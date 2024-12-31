@@ -358,6 +358,14 @@ bool os_window_is_open(void) {
   return false;
 }
 
+bool os_window_is_visible(void) {
+  return false;
+}
+
+bool os_window_is_focused(void) {
+  return false;
+}
+
 void os_window_get_size(uint32_t* width, uint32_t* height) {
   *width = *height = 0;
 }
