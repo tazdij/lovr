@@ -318,6 +318,10 @@ void os_on_quit(fn_quit* callback) {
   state.onQuit = callback;
 }
 
+void os_on_visible(fn_visible* callback) {
+  //
+}
+
 void os_on_focus(fn_focus* callback) {
   //
 }
