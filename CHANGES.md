@@ -23,6 +23,7 @@ dev
 - Add `t.headset.debug` to enable additional messages from the VR runtime.
 - Add `lovr.headset.getFeatures`.
 - Add `Model:resetBlendShapes`.
+- Add `lovr.system.isWindowVisible` and `lovr.system.isWindowFocused`.
 - Add `lovr.system.wasMousePressed` and `lovr.system.wasMouseReleased`.
 - Add `lovr.system.get/setClipboardText`.
 - Add `KeyCode`s for numpad keys.
@@ -120,6 +121,8 @@ dev
 - Change `Image:get/set/mapPixel` to support `r16f`, `rg16f`, and `rgba16f`.
 - Change `Image:getPixel` to return 1 for alpha when the format doesn't have an alpha component.
 - Change stack size of `state` stack (used with `Pass:push/pop`) from 4 to 8.
+- Change `lovr.focus` and `lovr.visible` to also get called for window events.
+- Change `lovr.focus` and `lovr.visible` to have an extra parameter for the display type.
 
 ### Fix
 
