@@ -131,7 +131,7 @@ uintptr_t os_get_xcb_window(void) {
 static struct {
   GLFWwindow* window;
   fn_quit* onQuitRequest;
-  fn_focus* onWindowVisible;
+  fn_visible* onWindowVisible;
   fn_focus* onWindowFocus;
   fn_resize* onWindowResize;
   fn_key* onKeyboardEvent;
