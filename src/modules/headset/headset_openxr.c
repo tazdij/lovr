@@ -1601,8 +1601,8 @@ static bool openxr_init(HeadsetConfig* config) {
     for (uint32_t i = 0; i < MAX_PROFILES; i++) {
       for (uint32_t j = 0; j < bindingCount[i]; j++) {
         if (bindings[i][j].action == ACTION_PINCH_POSE || bindings[i][j].action == ACTION_POKE_POSE) {
-          REMOVE_BINDINGS(bindings[i], bindingCount[i], j, 4);
-          bindingCount[i] -= 4;
+          REMOVE_BINDINGS(bindings[i], bindingCount[i], j, 2);
+          bindingCount[i] -= 2;
           break;
         }
       }
@@ -1611,7 +1611,7 @@ static bool openxr_init(HeadsetConfig* config) {
 
   if (!state.extensions.palmPose) {
     for (uint32_t i = 0; i < MAX_PROFILES; i++) {
-      for (uint32_t j = 0; bindings[i][j].path; j++) {
+      for (uint32_t j = 0; j < bindingCount[i]; j++) {
         if (bindings[i][j].action == ACTION_PALM_POSE) {
           REMOVE_BINDINGS(bindings[i], bindingCount[i], j, 2);
           bindingCount[i] -= 2;
