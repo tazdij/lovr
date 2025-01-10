@@ -462,7 +462,9 @@ static int luaLoader(lua_State* L) {
     luax_check(L, n > 0, "Tried to require a filename that was too long (%s)", module);
   }
 
-  return 0;
+  lua_pushfstring(L, "\n\tno module '%s' in virtual filesystem", module);
+
+  return 1;
 }
 
 #ifdef __ANDROID__
@@ -512,7 +514,8 @@ static int libLoaderCommon(lua_State* L, bool allInOneFlag) {
   }
 
   char* slash = strrchr(path, sep);
-  char* p = slash ? slash + 1 : path;
+  char* leaf = slash ? slash + 1 : path;
+  char* p = leaf;
   length = p - path;
 #endif
 
@@ -552,10 +555,6 @@ static int libLoaderCommon(lua_State* L, bool allInOneFlag) {
   }
 #endif
 
-  lua_getglobal(L, "package");
-  lua_getfield(L, -1, "loadlib");
-  lua_pushlstring(L, path, length);
-
   // Synthesize luaopen_<module> symbol
   luaL_Buffer buffer;
   luaL_buffinit(L, &buffer);
@@ -565,13 +564,29 @@ static int libLoaderCommon(lua_State* L, bool allInOneFlag) {
   }
   luaL_pushresult(&buffer);
 
-  lua_call(L, 2, 1);
+  lua_getglobal(L, "package");
+  lua_getfield(L, -1, "loadlib");
+  lua_pushlstring(L, path, length);
+  lua_pushvalue(L, -4); // symbol
+
+  lua_call(L, 2, 3);
 
 #ifdef __ANDROID__
   if (plugin) {
     dlclose(plugin);
   }
 #endif
+
+  if (lua_isfunction(L, -3)) {
+    lua_pop(L, 2);
+  } else if (lua_isstring(L, -1)) {
+    if (!strcmp(lua_tostring(L, -1), "init")) {
+      lua_pushfstring(L, "\n\tno symbol '%s' in plugin '%s'", lua_tostring(L, -5), leaf);
+    } else {
+      lua_pushfstring(L, "\n\tno plugin '%s'", leaf);
+    }
+  }
+
   return 1;
 }
 
