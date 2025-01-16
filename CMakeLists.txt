@@ -809,6 +809,9 @@ elseif(ANDROID)
     PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/raw/lib/${ANDROID_ABI}"
   )
 
+  # Build Lua libraries with global symbols, so plugins don't need to explicitly link against Lua
+  target_link_options(${LOVR_LUA} PRIVATE "-Wl,-z,global")
+
   if(LOVR_BUILD_EXE)
     set(ANDROID_JAR "${ANDROID_SDK}/platforms/${ANDROID_PLATFORM}/android.jar")
     set(ANDROID_TOOLS "${ANDROID_SDK}/build-tools/${ANDROID_BUILD_TOOLS_VERSION}")
