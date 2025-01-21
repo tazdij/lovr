@@ -281,7 +281,6 @@ static struct {
     bool gaze;
     bool handInteraction;
     bool handTracking;
-    bool handTrackingAim;
     bool handTrackingDataSource;
     bool handTrackingElbow;
     bool handTrackingMesh;
@@ -909,7 +908,6 @@ static bool openxr_init(HeadsetConfig* config) {
     { "XR_FB_foveation", &state.extensions.foveation, true },
     { "XR_FB_foveation_configuration", &state.extensions.foveationConfig, true },
     { "XR_FB_foveation_vulkan", &state.extensions.foveationVulkan, true },
-    { "XR_FB_hand_tracking_aim", &state.extensions.handTrackingAim, true },
     { "XR_FB_hand_tracking_mesh", &state.extensions.handTrackingMesh, true },
     { "XR_FB_keyboard_tracking", &state.extensions.keyboardTracking, true },
     { "XR_FB_passthrough", &state.extensions.questPassthrough, true },
@@ -1192,6 +1190,7 @@ static bool openxr_init(HeadsetConfig* config) {
     PROFILE_TRACKER,
     PROFILE_MX_INK,
     PROFILE_GAZE,
+    PROFILE_HAND,
     MAX_PROFILES
   };
 
@@ -1207,7 +1206,8 @@ static bool openxr_init(HeadsetConfig* config) {
     [PROFILE_PICO4] = "/interaction_profiles/bytedance/pico4_controller",
     [PROFILE_TRACKER] = "/interaction_profiles/htc/vive_tracker_htcx",
     [PROFILE_MX_INK] = "/interaction_profiles/logitech/mx_ink_stylus_logitech",
-    [PROFILE_GAZE] = "/interaction_profiles/ext/eye_gaze_interaction"
+    [PROFILE_GAZE] = "/interaction_profiles/ext/eye_gaze_interaction",
+    [PROFILE_HAND] = "/interaction_profiles/ext/hand_interaction_ext"
   };
 
   typedef struct {
@@ -1558,6 +1558,27 @@ static bool openxr_init(HeadsetConfig* config) {
     [PROFILE_GAZE] = (Binding[]) {
       { ACTION_GAZE_POSE, "/user/eyes_ext/input/gaze_ext/pose" },
       { 0, NULL }
+    },
+    [PROFILE_HAND] = (Binding[]) {
+      { ACTION_GRIP_POSE, "/user/hand/left/input/grip/pose" },
+      { ACTION_GRIP_POSE, "/user/hand/right/input/grip/pose" },
+      { ACTION_POINTER_POSE, "/user/hand/left/input/aim/pose" },
+      { ACTION_POINTER_POSE, "/user/hand/right/input/aim/pose" },
+      { ACTION_PINCH_POSE, "/user/hand/left/input/pinch_ext/pose" },
+      { ACTION_PINCH_POSE, "/user/hand/right/input/pinch_ext/pose" },
+      { ACTION_POKE_POSE, "/user/hand/left/input/poke_ext/pose" },
+      { ACTION_POKE_POSE, "/user/hand/right/input/poke_ext/pose" },
+      { ACTION_PALM_POSE, "/user/hand/left/input/palm_ext/pose" },
+      { ACTION_PALM_POSE, "/user/hand/right/input/palm_ext/pose" },
+      { ACTION_TRIGGER_DOWN, "/user/hand/left/input/pinch_ext/value" },
+      { ACTION_TRIGGER_DOWN, "/user/hand/right/input/pinch_ext/value" },
+      { ACTION_TRIGGER_AXIS, "/user/hand/left/input/pinch_ext/value" },
+      { ACTION_TRIGGER_AXIS, "/user/hand/right/input/pinch_ext/value" },
+      { ACTION_GRIP_DOWN, "/user/hand/left/input/grasp_ext/value" },
+      { ACTION_GRIP_DOWN, "/user/hand/right/input/grasp_ext/value" },
+      { ACTION_GRIP_AXIS, "/user/hand/left/input/grasp_ext/value" },
+      { ACTION_GRIP_AXIS, "/user/hand/right/input/grasp_ext/value" },
+      { 0, NULL }
     }
   };
 
@@ -1590,6 +1611,10 @@ static bool openxr_init(HeadsetConfig* config) {
 
   if (!state.extensions.gaze) {
     bindingCount[PROFILE_GAZE] = 0;
+  }
+
+  if (!state.extensions.handInteraction) {
+    bindingCount[PROFILE_HAND] = 0;
   }
 
   // Remove bindings for unsupported extensions
@@ -2338,65 +2363,40 @@ static bool openxr_getPose(Device device, float* position, float* orientation) {
     }
   }
 
-  // If there's no space to locate, or the pose action isn't active, fall back to alternative
-  // methods, e.g. hand tracking can sometimes be used for grip/aim/elbow devices
+  // If there's no space, or the pose action isn't active, fall back to hand tracking for some devices
   if (!state.spaces[device] || (action && !poseState.isActive)) {
-    bool point = false;
-    bool elbow = false;
-
-    if (state.extensions.handTrackingAim && (device == DEVICE_HAND_LEFT_POINT || device == DEVICE_HAND_RIGHT_POINT)) {
-      device = DEVICE_HAND_LEFT + (device == DEVICE_HAND_RIGHT_POINT);
-      point = true;
-    }
-
     if (state.extensions.handTrackingElbow && (device == DEVICE_ELBOW_LEFT || device == DEVICE_ELBOW_RIGHT)) {
-      device = DEVICE_HAND_LEFT + (device == DEVICE_ELBOW_RIGHT);
-      elbow = true;
-    }
+      XrHandTrackerEXT tracker = getHandTracker(device == DEVICE_ELBOW_LEFT ? DEVICE_HAND_LEFT : DEVICE_HAND_RIGHT);
 
-    XrHandTrackerEXT tracker = getHandTracker(device);
+      if (!tracker) {
+        return false;
+      }
 
-    if (!tracker) {
-      return false;
-    }
+      XrHandJointsLocateInfoEXT info = {
+        .type = XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT,
+        .baseSpace = state.referenceSpace,
+        .time = state.frameState.predictedDisplayTime
+      };
 
-    XrHandJointsLocateInfoEXT info = {
-      .type = XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT,
-      .baseSpace = state.referenceSpace,
-      .time = state.frameState.predictedDisplayTime
-    };
+      XrHandJointLocationEXT joints[MAX_HAND_JOINTS];
+      XrHandJointLocationsEXT hand = {
+        .type = XR_TYPE_HAND_JOINT_LOCATIONS_EXT,
+        .jointCount = 26 + state.extensions.handTrackingElbow,
+        .jointLocations = joints
+      };
 
-    XrHandJointLocationEXT joints[MAX_HAND_JOINTS];
-    XrHandJointLocationsEXT hand = {
-      .type = XR_TYPE_HAND_JOINT_LOCATIONS_EXT,
-      .jointCount = 26 + state.extensions.handTrackingElbow,
-      .jointLocations = joints
-    };
+      if (XR_FAILED(xrLocateHandJointsEXT(tracker, &info, &hand))) {
+        return false;
+      }
 
-    XrHandTrackingAimStateFB aimState = {
-      .type = XR_TYPE_HAND_TRACKING_AIM_STATE_FB
-    };
-
-    if (point) {
-      hand.next = &aimState;
-    }
-
-    if (XR_FAILED(xrLocateHandJointsEXT(tracker, &info, &hand)) || !hand.isActive) {
-      return false;
-    }
-
-    XrPosef* pose;
-    if (point) {
-      pose = &aimState.aimPose;
-    } else if (elbow) {
+      XrPosef* pose;
       pose = &joints[XR_HAND_FOREARM_JOINT_ELBOW_ULTRALEAP].pose;
-    } else {
-      pose = &joints[XR_HAND_JOINT_WRIST_EXT].pose;
+      memcpy(orientation, &pose->orientation, 4 * sizeof(float));
+      memcpy(position, &pose->position, 3 * sizeof(float));
+      return hand.isActive;
     }
 
-    memcpy(orientation, &pose->orientation, 4 * sizeof(float));
-    memcpy(position, &pose->position, 3 * sizeof(float));
-    return true;
+    return false;
   }
 
   XrSpaceLocation location = { .type = XR_TYPE_SPACE_LOCATION };
@@ -2560,47 +2560,12 @@ static bool openxr_getAxis(Device device, DeviceAxis axis, float* value) {
   } else {
     XrActionStateFloat actionState = { .type = XR_TYPE_ACTION_STATE_FLOAT };
 
-    XrResult result = xrGetActionStateFloat(state.session, &info, &actionState);
-
-    if (XR_FAILED(result) || !actionState.isActive) {
-      if (axis == AXIS_TRIGGER && state.extensions.handTrackingAim) { // Try FB extension for pinch
-        XrHandTrackerEXT tracker = getHandTracker(device);
-
-        if (!tracker) {
-          return false;
-        }
-
-        XrHandJointsLocateInfoEXT info = {
-          .type = XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT,
-          .baseSpace = state.referenceSpace,
-          .time = state.frameState.predictedDisplayTime
-        };
-
-        XrHandTrackingAimStateFB aimState = {
-          .type = XR_TYPE_HAND_TRACKING_AIM_STATE_FB
-        };
-
-        XrHandJointLocationEXT joints[MAX_HAND_JOINTS];
-        XrHandJointLocationsEXT hand = {
-          .type = XR_TYPE_HAND_JOINT_LOCATIONS_EXT,
-          .next = &aimState,
-          .jointCount = 26 + state.extensions.handTrackingElbow,
-          .jointLocations = joints
-        };
-
-        if (XR_FAILED(xrLocateHandJointsEXT(tracker, &info, &hand))) {
-          return false;
-        }
-
-        *value = aimState.pinchStrengthIndex;
-        return true;
-      }
-
+    if (XR_FAILED(xrGetActionStateFloat(state.session, &info, &actionState))) {
       return false;
     }
 
     *value = actionState.currentState;
-    return true;
+    return actionState.isActive;
   }
 }
 
