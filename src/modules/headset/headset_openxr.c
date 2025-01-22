@@ -1628,6 +1628,7 @@ static bool openxr_init(HeadsetConfig* config) {
         if (bindings[i][j].action == ACTION_PINCH_POSE || bindings[i][j].action == ACTION_POKE_POSE) {
           REMOVE_BINDINGS(bindings[i], bindingCount[i], j, 2);
           bindingCount[i] -= 2;
+          i--;
           break;
         }
       }
