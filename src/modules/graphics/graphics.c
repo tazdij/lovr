@@ -7593,6 +7593,7 @@ bool lovrPassCone(Pass* pass, float* transform, uint32_t segments) {
 }
 
 bool lovrPassCapsule(Pass* pass, float* transform, uint32_t segments) {
+  lovrCheck(segments >= 2, "Capsule segment count must be >= 2");
   float sx = vec3_length(transform + 0);
   float sy = vec3_length(transform + 4);
   float sz = vec3_length(transform + 8);
@@ -8051,7 +8052,7 @@ bool lovrPassMeshIndirect(Pass* pass, Buffer* vertices, Buffer* indices, Buffer*
 
   lovrCheck(shader, "A custom Shader must be bound to source draws from a Buffer");
   lovrCheck(offset % 4 == 0, "Draw Buffer offset must be a multiple of 4");
-  lovrCheck(offset + count * stride < draws->info.size, "Draw buffer range exceeds the size of the buffer");
+  lovrCheck(offset + count * stride <= draws->info.size, "Draw buffer range exceeds the size of the buffer");
   lovrCheck(!vertices || vertices->supportsMesh, "Vertex buffer has invalid format (can not contain nested structs/arrays, or matrix/index types)");
 
   DrawInfo info = {
