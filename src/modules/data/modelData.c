@@ -44,10 +44,10 @@ ModelData* lovrModelDataCreate(Blob* source, ModelDataIO* io) {
 
 void lovrModelDataDestroy(void* ref) {
   ModelData* model = ref;
-  for (uint32_t i = 0; i < model->blobCount; i++) {
+  for (uint32_t i = 0; model->blobs && i < model->blobCount; i++) {
     lovrRelease(model->blobs[i], lovrBlobDestroy);
   }
-  for (uint32_t i = 0; i < model->imageCount; i++) {
+  for (uint32_t i = 0; model->images && i < model->imageCount; i++) {
     lovrRelease(model->images[i], lovrImageDestroy);
   }
   map_free(model->blendShapeMap);
