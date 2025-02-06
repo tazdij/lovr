@@ -47,7 +47,7 @@ int lovrSetError(const char* format, ...);
 #define lovrAssertGoto(label, c, ...) do { if (!(c)) { lovrSetError(__VA_ARGS__); goto label; } } while (0)
 #ifdef LOVR_UNCHECKED
 #define lovrCheck(c, ...) ((void) 0)
-#define lovrCheckGoto(c, label, ...) ((void) 0)
+#define lovrCheckGoto(label, c, ...) ((void) 0)
 #else
 #define lovrCheck lovrAssert
 #define lovrCheckGoto lovrAssertGoto
