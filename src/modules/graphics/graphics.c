@@ -5469,7 +5469,7 @@ static bool lovrModelAnimateVertices(Model* model) {
 
   if (!beginFrame()) return false;
 
-  if ((!blend && !skin) || (!model->transformsDirty && !model->blendShapesDirty) || model->lastVertexAnimation == state.tick) {
+  if ((!blend && !skin) || (!model->transformsDirty && !model->blendShapesDirty) || model->lastVertexAnimation == state.tick || !model->vertexBuffer) {
     return true;
   }
 
