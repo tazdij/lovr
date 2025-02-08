@@ -839,7 +839,6 @@ bool lovrModelDataInitGltf(ModelData** result, Blob* source, ModelDataIO* io) {
                 primitive->material = NOM_U32(json, token);
               } else if (STR_EQ(key, "indices")) {
                 primitive->indices = &model->attributes[NOM_U32(json, token)];
-                lovrAssertGoto(fail, primitive->indices->type != U8, "Unsigned byte indices are not supported (must be unsigned shorts or unsigned ints)");
               } else if (STR_EQ(key, "mode")) {
                 switch (NOM_U32(json, token)) {
                   case 0: primitive->mode = DRAW_POINT_LIST; break;

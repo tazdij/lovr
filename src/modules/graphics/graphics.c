@@ -5069,9 +5069,9 @@ Model* lovrModelCreate(const ModelInfo* info) {
     }
 
     if (primitive->indices) {
-      char* indices = data->buffers[primitive->indices->buffer].data + primitive->indices->offset;
-      memcpy(indexData, indices, primitive->indices->count * indexSize);
-      indexData += primitive->indices->count * indexSize;
+      uint32_t indexCount = primitive->indices->count;
+      lovrModelDataCopyAttribute(data, primitive->indices, indexData, data->indexType, 1, false, indexCount, indexSize, 0);
+      indexData += indexCount * indexSize;
     }
   }
 
