@@ -84,6 +84,7 @@ dev
 - Add `raw` flag to `lovr.graphics.newShader`.
 - Add `border` `WrapMode`.
 - Add support for `layout(scalar)` buffers and `packedBuffers` graphics feature.
+- Add support for loading glTF models with 8 bit indices.
 
 ### Change
 
