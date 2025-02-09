@@ -423,11 +423,11 @@ bool os_window_is_open(void) {
 }
 
 bool os_window_is_visible(void) {
-  return !glfwGetWindowAttrib(glfwState.window, GLFW_ICONIFIED);
+  return glfwState.window && !glfwGetWindowAttrib(glfwState.window, GLFW_ICONIFIED);
 }
 
 bool os_window_is_focused(void) {
-  return glfwGetWindowAttrib(glfwState.window, GLFW_FOCUSED);
+  return glfwState.window && glfwGetWindowAttrib(glfwState.window, GLFW_FOCUSED);
 }
 
 void os_window_get_size(uint32_t* width, uint32_t* height) {
