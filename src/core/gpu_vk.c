@@ -3028,13 +3028,13 @@ static gpu_memory* allocate(gpu_memory_type type, VkMemoryRequirements info, VkD
         .memoryTypeIndex = allocator->memoryType
       };
 
-      VK(vkAllocateMemory(state.device, &memoryInfo, NULL, &memory->handle), "Failed to allocate GPU memory") {
+      VK(vkAllocateMemory(state.device, &memoryInfo, NULL, &memory->handle), "vkAllocateMemory") {
         allocator->block = NULL;
         return NULL;
       }
 
       if (allocator->memoryFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
-        VK(vkMapMemory(state.device, memory->handle, 0, VK_WHOLE_SIZE, 0, &memory->pointer), "Failed to map memory") {
+        VK(vkMapMemory(state.device, memory->handle, 0, VK_WHOLE_SIZE, 0, &memory->pointer), "vkMapMemory") {
           vkFreeMemory(state.device, memory->handle, NULL);
           memory->handle = NULL;
           return NULL;
