@@ -3275,6 +3275,7 @@ static float openxr_getLayerCurve(Layer* layer) {
 }
 
 static bool openxr_setLayerCurve(Layer* layer, float curve) {
+  if (!state.extensions.layerCurve) return true;
   if (curve < 1e-3) curve = 0.f;
 
   XrPosef quadPose;
