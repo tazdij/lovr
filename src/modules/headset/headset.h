@@ -55,8 +55,8 @@ typedef struct {
   bool handModel;
   bool controllerModel;
   bool controllerSkeleton;
-  bool layerCube;
-  bool layerSphere;
+  bool cubeBackground;
+  bool equirectBackground;
   bool layerCurve;
   bool layerDepthTest;
   bool layerFilter;

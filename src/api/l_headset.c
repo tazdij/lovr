@@ -141,8 +141,8 @@ static int l_lovrHeadsetGetFeatures(lua_State* L) {
   lua_pushboolean(L, features.handModel), lua_setfield(L, -2, "handModel");
   lua_pushboolean(L, features.controllerModel), lua_setfield(L, -2, "controllerModel");
   lua_pushboolean(L, features.controllerSkeleton), lua_setfield(L, -2, "controllerSkeleton");
-  lua_pushboolean(L, features.layerCube), lua_setfield(L, -2, "layerCube");
-  lua_pushboolean(L, features.layerSphere), lua_setfield(L, -2, "layerSphere");
+  lua_pushboolean(L, features.cubeBackground), lua_setfield(L, -2, "cubeBackground");
+  lua_pushboolean(L, features.equirectBackground), lua_setfield(L, -2, "equirectBackground");
   lua_pushboolean(L, features.layerCurve), lua_setfield(L, -2, "layerCurve");
   lua_pushboolean(L, features.layerDepthTest), lua_setfield(L, -2, "layerDepthTest");
   lua_pushboolean(L, features.layerFilter), lua_setfield(L, -2, "layerFilter");
@@ -692,7 +692,10 @@ static int l_lovrHeadsetSetBackground(lua_State* L) {
   uint32_t imageCount = 0;
   Texture* texture = NULL;
 
-  if ((texture = luax_totype(L, 1, Texture)) != NULL) {
+  if (lua_isnoneornil(L, 1)) {
+    lovrHeadsetInterface->setBackground(0, 0, 0);
+    return 0;
+  } else if ((texture = luax_totype(L, 1, Texture)) != NULL) {
     const TextureInfo* info = lovrTextureGetInfo(texture);
     width = info->width;
     height = info->height;

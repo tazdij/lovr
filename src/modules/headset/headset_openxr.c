@@ -2008,8 +2008,8 @@ static void openxr_getFeatures(HeadsetFeatures* features) {
   features->handModel = state.extensions.handTrackingMesh;
   features->controllerModel = state.extensions.controllerModel;
   features->controllerSkeleton = state.extensions.handTrackingDataSource && state.extensions.handTrackingMotionRange;
-  features->layerCube = state.extensions.layerCube;
-  features->layerSphere = state.extensions.layerEquirect || state.extensions.layerEquirect2;
+  features->cubeBackground = state.extensions.layerCube;
+  features->equirectBackground = state.extensions.layerEquirect || state.extensions.layerEquirect2;
   features->layerCurve = state.extensions.layerCurve;
   features->layerDepthTest = state.extensions.layerDepthTest;
   features->layerFilter = state.extensions.layerSettings && state.extensions.layerAutoFilter;
@@ -3076,6 +3076,9 @@ static Texture* openxr_setBackground(uint32_t width, uint32_t height, uint32_t l
     memset(swapchain, 0, sizeof(Swapchain));
     return NULL;
   }
+
+  lovrCheck(state.extensions.layerCube || layers != 6, "This headset does not support cubemap backgrounds");
+  lovrCheck(state.extensions.layerEquirect || state.extensions.layerEquirect2 || layers != 1, "This headset does not support equirectangular backgrounds");
 
   if (!swapchain_init(swapchain, width, height, STATIC | (layers == 6 ? CUBE : 0))) {
     return NULL;
