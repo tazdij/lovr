@@ -2010,6 +2010,7 @@ static void openxr_getFeatures(HeadsetFeatures* features) {
   features->controllerSkeleton = state.extensions.handTrackingDataSource && state.extensions.handTrackingMotionRange;
   features->cubeBackground = state.extensions.layerCube;
   features->equirectBackground = state.extensions.layerEquirect || state.extensions.layerEquirect2;
+  features->layerColor = state.extensions.layerColor;
   features->layerCurve = state.extensions.layerCurve;
   features->layerDepthTest = state.extensions.layerDepthTest;
   features->layerFilter = state.extensions.layerSettings && state.extensions.layerAutoFilter;

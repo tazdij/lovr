@@ -143,6 +143,7 @@ static int l_lovrHeadsetGetFeatures(lua_State* L) {
   lua_pushboolean(L, features.controllerSkeleton), lua_setfield(L, -2, "controllerSkeleton");
   lua_pushboolean(L, features.cubeBackground), lua_setfield(L, -2, "cubeBackground");
   lua_pushboolean(L, features.equirectBackground), lua_setfield(L, -2, "equirectBackground");
+  lua_pushboolean(L, features.layerColor), lua_setfield(L, -2, "layerColor");
   lua_pushboolean(L, features.layerCurve), lua_setfield(L, -2, "layerCurve");
   lua_pushboolean(L, features.layerDepthTest), lua_setfield(L, -2, "layerDepthTest");
   lua_pushboolean(L, features.layerFilter), lua_setfield(L, -2, "layerFilter");

@@ -149,6 +149,7 @@ static void simulator_getFeatures(HeadsetFeatures* features) {
   features->controllerSkeleton = false;
   features->cubeBackground = false;
   features->equirectBackground = false;
+  features->layerColor = false;
   features->layerCurve = false;
   features->layerDepthTest = false;
   features->layerFilter = false;
