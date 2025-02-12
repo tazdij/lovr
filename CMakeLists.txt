@@ -492,7 +492,7 @@ if(LOVR_ENABLE_GRAPHICS)
     set(LOVR_GLSL "${CMAKE_CURRENT_SOURCE_DIR}/etc/shaders/lovr.glsl")
     file(GLOB shader_files "etc/shaders/*.${ARGV0}")
     foreach(shader_file ${shader_files})
-      string(REGEX MATCH "([^\/]+)\.${ARGV0}" shader ${shader_file})
+      string(REGEX MATCH "([^\/]+)\\.${ARGV0}" shader ${shader_file})
       string(REPLACE ".${ARGV0}" "" shader ${shader})
       add_custom_command(
         OUTPUT ${shader_file}.h
