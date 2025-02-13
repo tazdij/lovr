@@ -639,8 +639,7 @@ static float overlapCallback(void* arg, const JPH_CollideShapeResult* result) {
   OverlapResult hit;
   OverlapContext* ctx = arg;
   hit.collider = (Collider*) (uintptr_t) JPH_BodyInterface_GetUserData(ctx->world->bodyInterfaceNoLock, result->bodyID2);
-  hit.shape = subshapeToShape(hit.collider, result->subShapeID2, NULL);
-  hit.triangle = ~0u;
+  hit.shape = subshapeToShape(hit.collider, result->subShapeID2, &hit.triangle);
   vec3_fromJolt(hit.position, &result->contactPointOn2);
   vec3_fromJolt(hit.normal, &result->penetrationAxis);
   vec3_scale(vec3_normalize(hit.normal), result->penetrationDepth);
@@ -669,6 +668,7 @@ bool lovrWorldOverlapShape(World* world, Shape* shape, float pose[7], float maxD
   JPH_CollideShapeSettings settings;
   JPH_CollideShapeSettings_Init(&settings);
   settings.maxSeparationDistance = maxDistance;
+  settings.backFaceMode = JPH_BackFaceMode_CollideWithBackFaces;
 
   JPH_BroadPhaseLayerFilter* layerFilter = getBroadPhaseLayerFilter(world, filter);
   JPH_ObjectLayerFilter* tagFilter = getObjectLayerFilter(world, filter);
