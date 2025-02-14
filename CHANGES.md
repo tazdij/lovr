@@ -6,42 +6,58 @@ dev
 
 ### Add
 
+#### General
+
+- Add support for declaring objects as to-be-closed variables in Lua 5.4.
+
+#### Filesystem
+
+- Add `--watch` CLI flag, `lovr.filechanged` event, and `lovr.filesystem.watch/unwatch`.
+- Add `File` object and `lovr.filesystem.newFile`.
+- Add `lovr.filesystem.getBundlePath` (for internal boot code).
+- Add `lovr.filesystem.setSource` (for internal boot code).
+
+#### Headset
+
 - Add `Layer` object, `lovr.headset.newLayer`, and `lovr.headset.get/setLayers`.
-- Add `lovr.headset.get/setFoveation`.
-- Add `t.headset.mask`.
-- Add back `lovr.headset.isMounted` and the `lovr.mount` callback.
 - Add `stylus` Device, `nib` DeviceButton, and `nib` DeviceAxis.
 - Add support for Logitech MX Ink input.
+- Add `lovr.headset.get/setFoveation`.
 - Add `t.headset.controllerskeleton` to control how controllers return hand tracking data.
 - Add `controller` field to the table returned by `lovr.headset.getSkeleton`.
-- Add support for BMFont in `Font` and `Rasterizer`.
-- Add `File` object and `lovr.filesystem.newFile`.
-- Add `Pass:polygon`.
-- Add `--watch` CLI flag, `lovr.filechanged` event, and `lovr.filesystem.watch/unwatch`.
-- Add `--simulator` CLI flag to force use of simulator headset driver.
+- Add `t.headset.mask`.
+- Add back `lovr.headset.isMounted` and the `lovr.mount` callback.
 - Add `lovr.headset.stop`, `lovr.headset.isActive`, and `t.headset.start`.
-- Add `t.headset.debug` to enable additional messages from the VR runtime.
 - Add `lovr.headset.getFeatures`.
-- Add `Model:resetBlendShapes`.
-- Add `lovr.system.isWindowVisible` and `lovr.system.isWindowFocused`.
-- Add `lovr.system.wasMousePressed` and `lovr.system.wasMouseReleased`.
-- Add `lovr.system.get/setClipboardText`.
-- Add `KeyCode`s for numpad keys.
+- Add `t.headset.debug` to enable additional messages from the VR runtime.
+- Add `--simulator` CLI flag to force use of simulator headset driver.
+- Add `lovr.headset.getHandles`.
+
+#### Graphics
+
+- Add `Pass:polygon`.
+- Add `Shader:hasVariable`.
+- Add support for BMFont in `Font` and `Rasterizer`.
 - Add support for `uniform` variables in shader code.
 - Add support for cubemap array textures.
 - Add support for transfer operations on texture views.
 - Add support for nesting texture views (creating a view of a view).
 - Add `sn10x3` `DataType`.
+- Add `border` `WrapMode`.
+- Add support for loading glTF models with 8 bit indices.
 - Add support for `d24` texture format.
 - Add support for `SampleID`, `SampleMaskIn`, `SampleMask`, and `SamplePosition` in pixel shaders.
+- Add support for `layout(scalar)` buffers and `packedBuffers` graphics feature.
+- Add `raw` flag to `lovr.graphics.newShader`.
+- Add `Texture:getLabel`, `Shader:getLabel`, and `Pass:getLabel`.
+- Add `Model:resetBlendShapes`.
+
+#### Math
+
 - Add `Quat:get/setEuler`.
-- Add `lovr.system.openConsole` (for internal Lua code).
-- Add `lovr.filesystem.getBundlePath` (for internal Lua code).
-- Add `lovr.filesystem.setSource` (for internal Lua code).
-- Add table support to `Channel:push`.
-- Add `lovr.thread.newChannel`.
-- Add `t.thread.workers` to configure number of worker threads.
-- Add support for declaring objects as to-be-closed variables in Lua 5.4.
+
+#### Physics
+
 - Add variant of `lovr.physics.newWorld` that takes a table of settings.
 - Add `World:interpolate`.
 - Add `World:get/setCallbacks` and `Contact` object.
@@ -77,14 +93,20 @@ dev
 - Add `Shape:get/setOffset`.
 - Add motor support to `HingeJoint` and `SliderJoint`.
 - Add support for creating a `MeshShape` from a `ModelData`.
-- Add `Texture:getLabel`, `Shader:getLabel`, and `Pass:getLabel`.
-- Add `Shader:hasVariable`.
-- Add `lovr.headset.getFeatures`.
-- Add `lovr.headset.getHandles`.
-- Add `raw` flag to `lovr.graphics.newShader`.
-- Add `border` `WrapMode`.
-- Add support for `layout(scalar)` buffers and `packedBuffers` graphics feature.
-- Add support for loading glTF models with 8 bit indices.
+
+#### System
+
+- Add `lovr.system.isWindowVisible` and `lovr.system.isWindowFocused`.
+- Add `lovr.system.wasMousePressed` and `lovr.system.wasMouseReleased`.
+- Add `lovr.system.get/setClipboardText`.
+- Add `lovr.system.openConsole` (for internal Lua code).
+- Add `KeyCode`s for numpad keys.
+
+#### Thread
+
+- Add table support to `Channel:push`.
+- Add `lovr.thread.newChannel`.
+- Add `t.thread.workers` to configure number of worker threads.
 
 ### Change
 
