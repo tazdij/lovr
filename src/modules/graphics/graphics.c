@@ -5417,7 +5417,7 @@ void lovrModelSetNodeTransform(Model* model, uint32_t node, float position[3], f
 }
 
 Buffer* lovrModelGetVertexBuffer(Model* model) {
-  return model->rawVertexBuffer;
+  return model->rawVertexBuffer ? model->rawVertexBuffer : model->vertexBuffer;
 }
 
 Buffer* lovrModelGetIndexBuffer(Model* model) {
