@@ -17,22 +17,6 @@ dev
 - Add `lovr.filesystem.getBundlePath` (for internal boot code).
 - Add `lovr.filesystem.setSource` (for internal boot code).
 
-#### Headset
-
-- Add `Layer` object, `lovr.headset.newLayer`, and `lovr.headset.get/setLayers`.
-- Add `stylus` Device, `nib` DeviceButton, and `nib` DeviceAxis.
-- Add support for Logitech MX Ink input.
-- Add `lovr.headset.get/setFoveation`.
-- Add `t.headset.controllerskeleton` to control how controllers return hand tracking data.
-- Add `controller` field to the table returned by `lovr.headset.getSkeleton`.
-- Add `t.headset.mask`.
-- Add back `lovr.headset.isMounted` and the `lovr.mount` callback.
-- Add `lovr.headset.stop`, `lovr.headset.isActive`, and `t.headset.start`.
-- Add `lovr.headset.getFeatures`.
-- Add `t.headset.debug` to enable additional messages from the VR runtime.
-- Add `--simulator` CLI flag to force use of simulator headset driver.
-- Add `lovr.headset.getHandles`.
-
 #### Graphics
 
 - Add `Pass:polygon`.
@@ -51,6 +35,22 @@ dev
 - Add `raw` flag to `lovr.graphics.newShader`.
 - Add `Texture:getLabel`, `Shader:getLabel`, and `Pass:getLabel`.
 - Add `Model:resetBlendShapes`.
+
+#### Headset
+
+- Add `Layer` object, `lovr.headset.newLayer`, and `lovr.headset.get/setLayers`.
+- Add `stylus` Device, `nib` DeviceButton, and `nib` DeviceAxis.
+- Add support for Logitech MX Ink input.
+- Add `lovr.headset.get/setFoveation`.
+- Add `t.headset.controllerskeleton` to control how controllers return hand tracking data.
+- Add `controller` field to the table returned by `lovr.headset.getSkeleton`.
+- Add `t.headset.mask`.
+- Add back `lovr.headset.isMounted` and the `lovr.mount` callback.
+- Add `lovr.headset.stop`, `lovr.headset.isActive`, and `t.headset.start`.
+- Add `lovr.headset.getFeatures`.
+- Add `t.headset.debug` to enable additional messages from the VR runtime.
+- Add `--simulator` CLI flag to force use of simulator headset driver.
+- Add `lovr.headset.getHandles`.
 
 #### Math
 
