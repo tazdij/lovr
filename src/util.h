@@ -5,9 +5,9 @@
 #pragma once
 
 #define LOVR_VERSION_MAJOR 0
-#define LOVR_VERSION_MINOR 17
-#define LOVR_VERSION_PATCH 1
-#define LOVR_VERSION_ALIAS "Tritium Gourmet"
+#define LOVR_VERSION_MINOR 18
+#define LOVR_VERSION_PATCH 0
+#define LOVR_VERSION_ALIAS "Dream Eater"
 
 #ifdef __cplusplus
 #define LOVR_NORETURN [[noreturn]]
