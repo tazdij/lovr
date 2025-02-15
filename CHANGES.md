@@ -39,6 +39,7 @@ v0.18.0 - 2025-02-14
 #### Headset
 
 - Add `Layer` object, `lovr.headset.newLayer`, and `lovr.headset.get/setLayers`.
+- Add `lovr.headset.setBackground`.
 - Add `stylus` Device, `nib` DeviceButton, and `nib` DeviceAxis.
 - Add support for Logitech MX Ink input.
 - Add `lovr.headset.get/setFoveation`.
@@ -166,7 +167,6 @@ v0.18.0 - 2025-02-14
 
 ### Deprecate
 
-- Deprecate `Texture:getSampleCount`.
 - Deprecate `World:get/setTightness` (use `stabilization` option when creating World).
 - Deprecate `World:get/setLinearDamping` (use `Collider:get/setLinearDamping`).
 - Deprecate `World:get/setAngularDamping` (use `Collider:get/setAngularDamping`).
