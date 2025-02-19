@@ -29,7 +29,7 @@ Features
 - **Asset Import** - Supports 3D models (glTF, OBJ), skeletal animation, HDR textures, cubemaps, fonts, etc.
 - **Spatialized Audio** - Audio is automatically spatialized using HRTFs.
 - **Vector Library** - Efficient first-class support for 3D vectors, quaternions, and matrices.
-- **3D Rigid Body Physics** - Including 4 collider shapes, triangle mesh colliders, and 4 joint types.
+- **3D Rigid Body Physics** - Including 7 collider shapes, triangle mesh colliders, and 6 joint types.
 - **Compute Shaders** - For high performance GPU tasks, like particles.
 
 Getting Started
