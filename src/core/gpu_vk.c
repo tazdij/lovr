@@ -2916,6 +2916,13 @@ void gpu_destroy(void) {
   if (state.device) vkDeviceWaitIdle(state.device);
   state.lastTickFinished = state.tick;
   expunge();
+  for (gpu_stream_pool* pool = state.streamPools; pool; pool = pool->next) {
+    vkDestroyCommandPool(state.device, pool->handle, NULL);
+    for (gpu_stream* stream = pool->head, *next; stream; stream = next) {
+      next = stream->next;
+      state.config.fnFree(stream);
+    }
+  }
   if (state.pipelineCache) vkDestroyPipelineCache(state.device, state.pipelineCache, NULL);
   for (uint32_t i = 0; i < TICK_DEPTH; i++) {
     gpu_tick* tick = &state.ticks[i];
