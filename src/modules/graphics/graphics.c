@@ -3812,7 +3812,7 @@ Material* lovrMaterialCreate(const MaterialInfo* info) {
     if (!found) {
       arr_expand(&state.materialBlocks, 1);
       lovrAssert(state.materialBlocks.length < UINT16_MAX, "Out of memory");
-      uint32_t blockIndex = state.materialBlocks.length;
+      uint16_t blockIndex = (uint16_t) state.materialBlocks.length;
       block = &state.materialBlocks.data[blockIndex];
       block->list = lovrMalloc(MATERIALS_PER_BLOCK * sizeof(Material));
       block->bundlePool = lovrMalloc(gpu_sizeof_bundle_pool());
@@ -3821,7 +3821,7 @@ Material* lovrMaterialCreate(const MaterialInfo* info) {
       for (uint32_t i = 0; i < MATERIALS_PER_BLOCK; i++) {
         block->list[i].next = i + 1;
         block->list[i].tick = 0;
-        block->list[i].block = (uint16_t) blockIndex;
+        block->list[i].block = blockIndex;
         block->list[i].index = i;
         block->list[i].bundle = (gpu_bundle*) ((char*) block->bundles + i * gpu_sizeof_bundle());
         block->list[i].hasWritableTexture = false;

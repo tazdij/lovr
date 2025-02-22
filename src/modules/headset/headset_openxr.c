@@ -3367,7 +3367,7 @@ static Pass* openxr_getLayerPass(Layer* layer) {
   float projection[16];
   mat4_orthographic(projection, 0, layer->info.width, 0, layer->info.height, -1.f, 1.f);
 
-  for (uint32_t i = 0; i < 1 << layer->info.stereo; i++) {
+  for (uint32_t i = 0; i < 1u << layer->info.stereo; i++) {
     lovrPassSetViewMatrix(layer->pass, i, viewMatrix);
     lovrPassSetProjection(layer->pass, i, projection);
   }

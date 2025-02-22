@@ -2063,8 +2063,6 @@ static void inverseTransformRay(float* origin, float* direction, float* position
 }
 
 bool lovrShapeContainsPoint(Shape* shape, float point[3]) {
-  float inverseRotation[4];
-
   if (shape->collider) {
     float position[3], orientation[4];
     lovrColliderGetPose(shape->collider, position, orientation);
@@ -2086,7 +2084,7 @@ bool lovrShapeRaycast(Shape* shape, float start[3], float end[3], CastResult* hi
   vec3_init(direction, end);
   vec3_sub(direction, start);
 
-  float position[3], orientation[4], inverseRotation[4];
+  float position[3], orientation[4];
 
   if (shape->collider) {
     lovrColliderGetPose(shape->collider, position, orientation);
