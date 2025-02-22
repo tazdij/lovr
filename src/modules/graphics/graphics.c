@@ -1336,7 +1336,11 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
   Globals* global = view.pointer;
   global->resolution[0] = canvas->width;
   global->resolution[1] = canvas->height;
+#ifdef LOVR_DISABLE_HEADSET
+  global->time = os_get_time();
+#else
   global->time = lovrHeadsetInterface ? lovrHeadsetInterface->getDisplayTime() : os_get_time();
+#endif
 
   // Cameras
   uint32_t padding = (6 - canvas->views) * sizeof(Camera); // Ensure shader can always access all 6 cameras
