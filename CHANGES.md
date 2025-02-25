@@ -1,6 +1,13 @@
 Changelog
 ===
 
+dev
+---
+
+### Fix
+
+- Fix `ConvexShape` scale not working when created from a table of points.
+
 v0.18.0 - 2025-02-14
 ---
 
