@@ -7,6 +7,7 @@ dev
 ### Fix
 
 - Fix `ConvexShape` scale not working when created from a table of points.
+- Fix `ConvexShape:getPoint` to apply the shape's center of mass and scale.
 
 v0.18.0 - 2025-02-14
 ---
