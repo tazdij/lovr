@@ -2301,9 +2301,15 @@ uint32_t lovrConvexShapeGetPointCount(ConvexShape* shape) {
 bool lovrConvexShapeGetPoint(ConvexShape* shape, uint32_t index, float point[3]) {
   lovrCheck(index < lovrConvexShapeGetPointCount(shape), "Invalid point index '%d'", index + 1);
   const JPH_ConvexHullShape* hull = (const JPH_ConvexHullShape*) JPH_DecoratedShape_GetInnerShape((const JPH_DecoratedShape*) shape->handle);
+  JPH_Vec3 scale;
+  JPH_ScaledShape_GetScale((JPH_ScaledShape*) shape->handle, &scale);
+  JPH_Vec3 center;
+  JPH_Shape_GetCenterOfMass((JPH_Shape*) hull, &center);
   JPH_Vec3 v;
   JPH_ConvexHullShape_GetPoint(hull, index, &v);
   vec3_fromJolt(point, &v);
+  vec3_add(point, &center.x);
+  vec3_scale(point, scale.x);
   return true;
 }
 
