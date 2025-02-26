@@ -2922,6 +2922,10 @@ void gpu_destroy(void) {
       next = stream->next;
       state.config.fnFree(stream);
     }
+    pool->handle = VK_NULL_HANDLE;
+    pool->head = NULL;
+    pool->tail = NULL;
+    pool->tick = 0;
   }
   if (state.pipelineCache) vkDestroyPipelineCache(state.device, state.pipelineCache, NULL);
   for (uint32_t i = 0; i < TICK_DEPTH; i++) {
