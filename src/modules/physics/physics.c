@@ -2280,6 +2280,7 @@ ConvexShape* lovrConvexShapeCreate(float points[], uint32_t count, float scale) 
   shape->handle = (JPH_Shape*) JPH_ScaledShape_Create(hull, vec3_toJolt(scale3));
   JPH_Shape_SetUserData(shape->handle, (uint64_t) (uintptr_t) shape);
   quat_identity(shape->rotation);
+  JPH_Shape_Destroy(hull);
   return shape;
 }
 
@@ -2349,15 +2350,16 @@ MeshShape* lovrMeshShapeCreate(uint32_t vertexCount, float* vertices, uint32_t i
 
   JPH_MeshShapeSettings* settings = JPH_MeshShapeSettings_Create2((const JPH_Vec3*) vertices, vertexCount, triangles, triangleCount);
   JPH_MeshShapeSettings_SetPerTriangleUserData(settings, true);
-  JPH_MeshShape* mesh = JPH_MeshShapeSettings_CreateShape(settings);
+  JPH_Shape* mesh = (JPH_Shape*) JPH_MeshShapeSettings_CreateShape(settings);
   JPH_ShapeSettings_Destroy((JPH_ShapeSettings*) settings);
   lovrFree(triangles);
 
   // We wrap MeshShapes in ScaledShapes so that clones can have unique userdata
   float scale3[3] = { scale, scale, scale };
-  shape->handle = (JPH_Shape*) JPH_ScaledShape_Create((JPH_Shape*) mesh, vec3_toJolt(scale3));
+  shape->handle = (JPH_Shape*) JPH_ScaledShape_Create(mesh, vec3_toJolt(scale3));
   JPH_Shape_SetUserData(shape->handle, (uint64_t) (uintptr_t) shape);
   quat_identity(shape->rotation);
+  JPH_Shape_Destroy(mesh);
   return shape;
 }
 
