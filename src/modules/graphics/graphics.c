@@ -3238,15 +3238,11 @@ ShaderSource lovrGraphicsGetDefaultShaderSource(DefaultShader type, ShaderStage 
 }
 
 Shader* lovrGraphicsGetDefaultShader(DefaultShader type) {
-  if (state.defaultShaders[type]) {
-    return state.defaultShaders[type];
-  }
+  Shader* shader = atomic_load(&state.defaultShaders[type]);
 
-  switch (type) {
-    case SHADER_ANIMATOR:
-    case SHADER_BLENDER:
-    case SHADER_TALLY_MERGE:
-      return state.defaultShaders[type] = lovrShaderCreate(&(ShaderInfo) {
+  if (!shader) {
+    if (type == SHADER_ANIMATOR || type == SHADER_BLENDER || type == SHADER_TALLY_MERGE) {
+      shader = lovrShaderCreate(&(ShaderInfo) {
         .type = SHADER_COMPUTE,
         .stages = (ShaderSource[1]) {
           lovrGraphicsGetDefaultShaderSource(type, STAGE_COMPUTE)
@@ -3256,8 +3252,8 @@ Shader* lovrGraphicsGetDefaultShader(DefaultShader type) {
         .flagCount = 1,
         .isDefault = true
       });
-    default:
-      return state.defaultShaders[type] = lovrShaderCreate(&(ShaderInfo) {
+    } else {
+      shader = lovrShaderCreate(&(ShaderInfo) {
         .type = SHADER_GRAPHICS,
         .stages = (ShaderSource[2]) {
           lovrGraphicsGetDefaultShaderSource(type, STAGE_VERTEX),
@@ -3266,7 +3262,16 @@ Shader* lovrGraphicsGetDefaultShader(DefaultShader type) {
         .stageCount = 2,
         .isDefault = true
       });
+    }
+
+    Shader* expected = NULL;
+    if (!atomic_compare_exchange_strong(&state.defaultShaders[type], &expected, shader)) {
+      lovrShaderDestroy(shader);
+      shader = expected;
+    }
   }
+
+  return shader;
 }
 
 Shader* lovrShaderCreate(const ShaderInfo* info) {
