@@ -624,10 +624,10 @@ static void* tempAlloc(Allocator* allocator, size_t size);
 static size_t tempPush(Allocator* allocator);
 static void tempPop(Allocator* allocator, size_t stack);
 static gpu_pipeline* getPipeline(uint32_t index);
-static BufferBlock* getBlock(gpu_buffer_type type, uint32_t size);
 static void freeBlock(BufferAllocator* allocator, BufferBlock* block);
 static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type type, uint32_t size, size_t align);
 static BufferView getBuffer(gpu_buffer_type type, uint32_t size, size_t align);
+static void destroyBuffers(BufferAllocator* allocator);
 static int u64cmp(const void* a, const void* b);
 static uint32_t lcm(uint32_t a, uint32_t b);
 static bool beginFrame(void);
@@ -938,20 +938,7 @@ void lovrGraphicsDestroy(void) {
   }
   map_free(&state.passLookup);
   for (size_t i = 0; i < COUNTOF(state.bufferAllocators); i++) {
-    BufferBlock* block = state.bufferAllocators[i].freelist;
-    while (block) {
-      gpu_buffer_destroy(block->handle);
-      BufferBlock* next = block->next;
-      lovrFree(block);
-      block = next;
-    }
-
-    BufferBlock* current = state.bufferAllocators[i].current;
-
-    if (current) {
-      gpu_buffer_destroy(current->handle);
-      lovrFree(current);
-    }
+    destroyBuffers(&state.bufferAllocators[i]);
   }
   Layout* layout = state.layouts;
   while (layout) {
@@ -1903,12 +1890,32 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
     }
 
     // Mark the tick for any buffers that filled up, so we know when to recycle them
-    for (BufferBlock* block = passes[i]->buffers.freelist; block; block = block->next) {
-      block->tick = state.tick;
+    if (passes[i]->buffers.current) {
+      for (BufferBlock* block = passes[i]->buffers.current->next; block; block = block->next) {
+        block->tick = state.tick;
+      }
     }
   }
 
   lovrAssert(gpu_submit(streams, streamCount), "Failed to submit GPU command buffers: %s", gpu_get_error());
+
+  // All of the non-static buffers after the front of the 'current' list are the buffers that filled
+  // up while this frame was being recorded.  Set their tick to the current tick and chain them onto
+  // the end of the freelist.
+  for (size_t i = 0; i < COUNTOF(state.bufferAllocators); i++) {
+    if (i != GPU_BUFFER_STATIC) {
+      BufferAllocator* allocator = &state.bufferAllocators[i];
+
+      if (allocator->current) {
+        for (BufferBlock* block = allocator->current->next; block; block = block->next) {
+          block->tick = state.tick;
+        }
+
+        freeBlock(allocator, allocator->current->next);
+        allocator->current->next = NULL;
+      }
+    }
+  }
 
   state.active = false;
   state.stream = NULL;
@@ -5761,12 +5768,10 @@ static BufferView lovrPassGetBuffer(Pass* pass, uint32_t size, size_t align) {
 }
 
 static void lovrPassRelease(Pass* pass) {
-  // Chain all of the Pass's full buffers onto the end of the global freelist
-  if (pass->buffers.freelist) {
-    BufferBlock** list = &state.bufferAllocators[GPU_BUFFER_STREAM].freelist;
-    while (*list) list = (BufferBlock**) &(*list)->next;
-    *list = pass->buffers.freelist;
-    pass->buffers.freelist = NULL;
+  // Chain all of the full buffers onto the end of the freelist, since they are now unreferenced
+  if (pass->buffers.current && pass->buffers.current->next) {
+    freeBlock(&pass->buffers, pass->buffers.current->next);
+    pass->buffers.current->next = NULL;
   }
 
   if (pass->pipeline) {
@@ -5862,10 +5867,7 @@ void lovrPassDestroy(void* ref) {
     gpu_tally_destroy(pass->tally.gpu);
     lovrRelease(pass->tally.tempBuffer, lovrBufferDestroy);
   }
-  if (pass->buffers.current) {
-    pass->buffers.current->tick = state.tick;
-    freeBlock(&state.bufferAllocators[GPU_BUFFER_STREAM], pass->buffers.current);
-  }
+  destroyBuffers(&pass->buffers);
   os_vm_free(pass->allocator.memory, pass->allocator.limit);
   lovrFree(pass->label);
   lovrFree(pass);
@@ -8211,41 +8213,9 @@ static gpu_pipeline* getPipeline(uint32_t index) {
   return (gpu_pipeline*) ((char*) state.pipelines + index * gpu_sizeof_pipeline());
 }
 
-static BufferBlock* getBlock(gpu_buffer_type type, uint32_t size) {
-  BufferBlock* block = state.bufferAllocators[type].freelist;
-
-  if (block && block->size >= size && gpu_is_complete(block->tick)) {
-    state.bufferAllocators[type].freelist = block->next;
-    block->next = NULL;
-    return block;
-  }
-
-  block = lovrMalloc(sizeof(BufferBlock) + gpu_sizeof_buffer());
-  block->handle = (gpu_buffer*) (block + 1);
-  block->size = MAX(size, 1 << 22);
-  block->next = NULL;
-  block->ref = 0;
-
-  gpu_buffer_info info = {
-    .type = type,
-    .size = block->size,
-    .pointer = &block->pointer,
-    .label = "Buffer Block"
-  };
-
-  if (!gpu_buffer_init(block->handle, &info)) {
-    lovrSetError("Failed to create GPU buffer: %s", gpu_get_error());
-    lovrFree(block);
-    return NULL;
-  }
-
-  return block;
-}
-
 static void freeBlock(BufferAllocator* allocator, BufferBlock* block) {
   BufferBlock** list = &allocator->freelist;
   while (*list) list = (BufferBlock**) &(*list)->next;
-  block->next = NULL;
   *list = block;
 }
 
@@ -8254,13 +8224,53 @@ static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type typ
   BufferBlock* block = allocator->current;
 
   if (!block || cursor + size > block->size) {
-    if (block && type != GPU_BUFFER_STATIC) {
-      block->tick = state.tick;
-      freeBlock(allocator, block);
+    BufferBlock** list = &allocator->freelist;
+    BufferBlock** prev = NULL;
+
+    // Search through the freelist for the smallest block that is big enough to satisfy the request.
+    // If we reach a block that the GPU is still using, we can stop looking.
+    while (*list) {
+      if (!gpu_is_complete((*list)->tick)) {
+        break;
+      } else if ((*list)->size >= size && (!prev || (*list)->size < (*prev)->size)) {
+        prev = list;
+      } else {
+        list = (BufferBlock**) &(*list)->next;
+      }
     }
 
-    if ((block = getBlock(type, size)) == NULL) {
-      return (BufferView) { 0 };
+    // If we found a usable block, remove it from the freelist, otherwise make a new block!
+    if (prev) {
+      block = *prev;
+      *prev = block->next;
+    } else {
+      block = lovrMalloc(sizeof(BufferBlock) + gpu_sizeof_buffer());
+      block->handle = (gpu_buffer*) (block + 1);
+      block->size = MAX(size, 1 << 22);
+      block->next = NULL;
+      block->ref = 0;
+
+      gpu_buffer_info info = {
+        .type = type,
+        .size = block->size,
+        .pointer = &block->pointer,
+        .label = "Buffer Block"
+      };
+
+      if (!gpu_buffer_init(block->handle, &info)) {
+        lovrFree(block);
+        lovrSetError("Failed to create GPU buffer: %s", gpu_get_error());
+        return (BufferView) { 0 };
+      }
+    }
+
+    // For non-static buffers, "current" is a chain of buffers.  Everything except the front of the
+    // "current" list will periodically get recycled back on to the freelist (e.g. when a new frame
+    // starts, or when a Pass gets reset).
+    // Static buffers, on the other hand, are refcounted and do not need to chain together like this
+    // (and doing that would make freeing more difficult).
+    if (type != GPU_BUFFER_STATIC) {
+      block->next = allocator->current;
     }
 
     allocator->current = block;
@@ -8280,6 +8290,20 @@ static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type typ
 
 static BufferView getBuffer(gpu_buffer_type type, uint32_t size, size_t align) {
   return allocateBuffer(&state.bufferAllocators[type], type, size, align);
+}
+
+static void destroyBuffers(BufferAllocator* allocator) {
+  for (BufferBlock* block = allocator->current, *next; block; block = next) {
+    gpu_buffer_destroy(block->handle);
+    next = block->next;
+    lovrFree(block);
+  }
+
+  for (BufferBlock* block = allocator->freelist, *next; block; block = next) {
+    gpu_buffer_destroy(block->handle);
+    next = block->next;
+    lovrFree(block);
+  }
 }
 
 static int u64cmp(const void* a, const void* b) {
