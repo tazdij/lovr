@@ -624,9 +624,10 @@ static void* tempAlloc(Allocator* allocator, size_t size);
 static size_t tempPush(Allocator* allocator);
 static void tempPop(Allocator* allocator, size_t stack);
 static gpu_pipeline* getPipeline(uint32_t index);
-static void freeBlock(BufferAllocator* allocator, BufferBlock* block);
 static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type type, uint32_t size, size_t align);
 static BufferView getBuffer(gpu_buffer_type type, uint32_t size, size_t align);
+static void releaseBlock(BufferBlock* block);
+static void recycleBlocks(BufferAllocator* allocator, BufferBlock* blocks);
 static void destroyBuffers(BufferAllocator* allocator);
 static int u64cmp(const void* a, const void* b);
 static uint32_t lcm(uint32_t a, uint32_t b);
@@ -909,11 +910,8 @@ void lovrGraphicsDestroy(void) {
   lovrRelease(state.defaultMaterial, lovrMaterialDestroy);
   for (size_t i = 0; i < state.materialBlocks.length; i++) {
     MaterialBlock* block = &state.materialBlocks.data[i];
-    BufferBlock* current = state.bufferAllocators[GPU_BUFFER_STATIC].current;
-    if (block->view.block != current && atomic_fetch_sub(&block->view.block->ref, 1) == 1) {
-      freeBlock(&state.bufferAllocators[GPU_BUFFER_STATIC], block->view.block);
-    }
     gpu_bundle_pool_destroy(block->bundlePool);
+    releaseBlock(block->view.block);
     lovrFree(block->list);
     lovrFree(block->bundlePool);
     lovrFree(block->bundles);
@@ -1911,7 +1909,7 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
           block->tick = state.tick;
         }
 
-        freeBlock(allocator, allocator->current->next);
+        recycleBlocks(allocator, allocator->current->next);
         allocator->current->next = NULL;
       }
     }
@@ -2124,7 +2122,6 @@ Buffer* lovrBufferCreate(const BufferInfo* info, void** data) {
   buffer->gpu = view.buffer;
   buffer->base = view.offset;
   buffer->block = view.block;
-  atomic_fetch_add(&buffer->block->ref, 1);
 
   if (data) {
     if (view.pointer) {
@@ -2147,10 +2144,7 @@ Buffer* lovrBufferCreate(const BufferInfo* info, void** data) {
 
 void lovrBufferDestroy(void* ref) {
   Buffer* buffer = ref;
-  BufferAllocator* allocator = &state.bufferAllocators[GPU_BUFFER_STATIC];
-  if (buffer->block != allocator->current && atomic_fetch_sub(&buffer->block->ref, 1) == 1) {
-    freeBlock(allocator, buffer->block);
-  }
+  releaseBlock(buffer->block);
   lovrFree(buffer);
 }
 
@@ -3871,7 +3865,6 @@ Material* lovrMaterialCreate(const MaterialInfo* info) {
         return NULL;
       }
 
-      atomic_fetch_add(&block->view.block->ref, 1);
       state.materialBlock = blockIndex;
       state.materialBlocks.length++;
     }
@@ -5775,7 +5768,7 @@ static BufferView lovrPassGetBuffer(Pass* pass, uint32_t size, size_t align) {
 static void lovrPassRelease(Pass* pass) {
   // Chain all of the full buffers onto the end of the freelist, since they are now unreferenced
   if (pass->buffers.current && pass->buffers.current->next) {
-    freeBlock(&pass->buffers, pass->buffers.current->next);
+    recycleBlocks(&pass->buffers, pass->buffers.current->next);
     pass->buffers.current->next = NULL;
   }
 
@@ -8218,12 +8211,6 @@ static gpu_pipeline* getPipeline(uint32_t index) {
   return (gpu_pipeline*) ((char*) state.pipelines + index * gpu_sizeof_pipeline());
 }
 
-static void freeBlock(BufferAllocator* allocator, BufferBlock* block) {
-  BufferBlock** list = &allocator->freelist;
-  while (*list) list = (BufferBlock**) &(*list)->next;
-  *list = block;
-}
-
 static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type type, uint32_t size, size_t align) {
   uint32_t cursor = (uint32_t) ((allocator->cursor + (align - 1)) / align * align);
   BufferBlock* block = allocator->current;
@@ -8269,12 +8256,12 @@ static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type typ
       }
     }
 
-    // For non-static buffers, "current" is a chain of buffers.  Everything except the front of the
-    // "current" list will periodically get recycled back on to the freelist (e.g. when a new frame
-    // starts, or when a Pass gets reset).
-    // Static buffers, on the other hand, are refcounted and do not need to chain together like this
-    // (and doing that would make freeing more difficult).
-    if (type != GPU_BUFFER_STATIC) {
+    // Static buffers are refcounted, and get recycled when their refcount reaches zero.
+    // Non-static buffers keep a chain of "current" buffers.  Current buffers periodically get
+    // recycled on to the freelist (e.g. when a new frame starts, when the pass gets reset).
+    if (type == GPU_BUFFER_STATIC) {
+      atomic_fetch_add(&block->ref, 1);
+    } else {
       block->next = allocator->current;
     }
 
@@ -8295,6 +8282,21 @@ static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type typ
 
 static BufferView getBuffer(gpu_buffer_type type, uint32_t size, size_t align) {
   return allocateBuffer(&state.bufferAllocators[type], type, size, align);
+}
+
+// Should only be called for static buffers
+static void releaseBlock(BufferBlock* block) {
+  BufferAllocator* allocator = &state.bufferAllocators[GPU_BUFFER_STATIC];
+  if (atomic_fetch_sub(&block->ref, 1) == 0 && block != allocator->current) {
+    block->tick = state.tick;
+    recycleBlocks(allocator, block);
+  }
+}
+
+static void recycleBlocks(BufferAllocator* allocator, BufferBlock* blocks) {
+  BufferBlock** tail = &allocator->freelist;
+  while (*tail) tail = (BufferBlock**) &(*tail)->next;
+  *tail = blocks;
 }
 
 static void destroyBuffers(BufferAllocator* allocator) {
