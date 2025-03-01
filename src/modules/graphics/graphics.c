@@ -15,6 +15,7 @@
 #include "shaders.h"
 #include <math.h>
 #include <stdatomic.h>
+#include <threads.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -383,7 +384,6 @@ enum {
 typedef struct {
   char* memory;
   size_t cursor;
-  size_t length;
   size_t limit;
 } Allocator;
 
@@ -573,6 +573,10 @@ typedef struct {
   uint32_t tick;
 } ScratchTexture;
 
+static thread_local struct {
+  Allocator stack;
+} thread;
+
 static struct {
   uint32_t ref;
   bool glslang;
@@ -615,14 +619,14 @@ static struct {
   Layout* builtinLayout;
   Layout* materialLayout;
   Layout* uniformLayout;
-  Allocator allocator;
 } state;
 
 // Helpers
 
-static void* tempAlloc(Allocator* allocator, size_t size);
-static size_t tempPush(Allocator* allocator);
-static void tempPop(Allocator* allocator, size_t stack);
+static void initAllocator(Allocator* allocator);
+static void* allocate(Allocator* allocator, size_t size);
+static size_t stackPush(Allocator* allocator);
+static void stackPop(Allocator* allocator, size_t stack);
 static gpu_pipeline* getPipeline(uint32_t index);
 static BufferView allocateBuffer(BufferAllocator* allocator, gpu_buffer_type type, uint32_t size, size_t align);
 static BufferView getBuffer(gpu_buffer_type type, uint32_t size, size_t align);
@@ -658,7 +662,11 @@ static void onMessage(void* context, const char* message);
 // Entry
 
 bool lovrGraphicsInit(GraphicsConfig* config) {
-  if (atomic_fetch_add(&state.ref, 1)) return false;
+  initAllocator(&thread.stack);
+
+  if (atomic_fetch_add(&state.ref, 1)) {
+    return false;
+  }
 
   gpu_config gpu = {
     .debug = config->debug,
@@ -690,17 +698,13 @@ bool lovrGraphicsInit(GraphicsConfig* config) {
     os_window_message_box(string);
     lovrFree(string);
 #endif
-    return lovrSetError("Failed to initialize GPU: %s", gpu_get_error());
+    lovrSetError("Failed to initialize GPU: %s", gpu_get_error());
+    lovrFree(thread.stack.memory);
+    return false;
   }
 
   state.config = *config;
   state.timingEnabled = config->debug;
-
-  // Temporary frame memory uses a large 1GiB virtual memory allocation, committing pages as needed
-  state.allocator.length = 1 << 14;
-  state.allocator.limit = 1 << 30;
-  state.allocator.memory = os_vm_init(state.allocator.limit);
-  lovrAssertGoto(fail, state.allocator.memory && os_vm_commit(state.allocator.memory, state.allocator.length), "Failed to initialize temp allocator");
 
   state.pipelines = os_vm_init(MAX_PIPELINES * gpu_sizeof_pipeline());
   lovrAssertGoto(fail, state.pipelines, "Failed to allocate memory for pipelines");
@@ -880,7 +884,11 @@ fail:
 }
 
 void lovrGraphicsDestroy(void) {
-  if (atomic_fetch_sub(&state.ref, 1) != 1) return;
+  if (atomic_fetch_sub(&state.ref, 1) != 1) {
+    lovrFree(thread.stack.memory);
+    memset(&thread, 0, sizeof(thread));
+    return;
+  }
 #ifndef LOVR_DISABLE_HEADSET
   // If there's an active headset session it needs to be stopped so it can clean up its Pass and
   // swapchain textures before gpu_destroy is called.  This is really hacky and should be solved
@@ -958,7 +966,8 @@ void lovrGraphicsDestroy(void) {
 #ifdef LOVR_USE_GLSLANG
   if (state.glslang) glslang_finalize_process();
 #endif
-  os_vm_free(state.allocator.memory, state.allocator.limit);
+  lovrFree(thread.stack.memory);
+  memset(&thread, 0, sizeof(thread));
   memset(&state, 0, sizeof(state));
 }
 
@@ -1211,12 +1220,13 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
   // Frustum Culling
 
   uint32_t activeDrawCount = 0;
-  uint16_t* activeDraws = tempAlloc(&state.allocator, pass->drawCount * sizeof(uint16_t));
+  uint16_t* activeDraws = allocate(&thread.stack, pass->drawCount * sizeof(uint16_t));
 
   if (pass->flags & NEEDS_VIEW_CULL) {
-    typedef struct { float planes[6][4]; } Frustum;
-    Frustum* frusta = tempAlloc(&state.allocator, canvas->views * sizeof(Frustum));
     uint32_t drawIndex = 0;
+
+    typedef struct { float planes[6][4]; } Frustum;
+    Frustum frusta[6];
 
     for (uint32_t c = 0; c < pass->cameraCount; c++) {
       for (uint32_t v = 0; v < canvas->views; v++) {
@@ -1689,12 +1699,14 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
     return false;
   }
 
+  size_t stack = stackPush(&thread.stack);
+
   bool xrCanvas = false;
   uint32_t streamCount = 0;
   uint32_t maxStreams = count + 3;
-  gpu_stream** streams = tempAlloc(&state.allocator, maxStreams * sizeof(gpu_stream*));
-  gpu_barrier* computeBarriers = tempAlloc(&state.allocator, count * sizeof(gpu_barrier));
-  gpu_barrier* renderBarriers = tempAlloc(&state.allocator, count * sizeof(gpu_barrier));
+  gpu_stream** streams = allocate(&thread.stack, maxStreams * sizeof(gpu_stream*));
+  gpu_barrier* computeBarriers = allocate(&thread.stack, count * sizeof(gpu_barrier));
+  gpu_barrier* renderBarriers = allocate(&thread.stack, count * sizeof(gpu_barrier));
 
   if (count > 0) {
     memset(computeBarriers, 0, count * sizeof(gpu_barrier));
@@ -1775,7 +1787,7 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
         .count = timestampCount
       };
 
-      lovrAssert(gpu_tally_init(state.timestamps, &info), "Failed to create timestamp tally: %s", gpu_get_error());
+      lovrAssertGoto(fail, gpu_tally_init(state.timestamps, &info), "Failed to create timestamp tally: %s", gpu_get_error());
       state.timestampCount = timestampCount;
     }
 
@@ -1784,7 +1796,7 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
 
   gpu_sync(state.stream, &state.barrier, 1);
 
-  lovrAssert(gpu_stream_end(state.stream), "Failed to end GPU command buffer: %s", gpu_get_error());
+  lovrAssertGoto(fail, gpu_stream_end(state.stream), "Failed to end GPU command buffer: %s", gpu_get_error());
 
   for (uint32_t i = 0; i < count; i++) {
     gpu_stream* stream = streams[streamCount++] = gpu_stream_begin(passes[i]->label);
@@ -1795,13 +1807,13 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
     }
 
     if (!recordComputePass(passes[i], stream)) {
-      return false;
+      goto fail;
     }
 
     gpu_sync(stream, &computeBarriers[i], 1);
 
     if (!recordRenderPass(passes[i], stream)) {
-      return false;
+      goto fail;
     }
 
     gpu_sync(stream, &renderBarriers[i], 1);
@@ -1811,20 +1823,20 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
       gpu_tally_mark(stream, state.timestamps, 2 * i + 1);
     }
 
-    lovrAssert(gpu_stream_end(stream), "Failed to end GPU command buffer: %s", gpu_get_error());
+    lovrAssertGoto(fail, gpu_stream_end(stream), "Failed to end GPU command buffer: %s", gpu_get_error());
   }
 
   if (xrCanvas || (state.timingEnabled && count > 0)) {
     gpu_stream* stream = streams[streamCount++] = gpu_stream_begin(NULL);
-    lovrAssert(stream, "Failed to begin command buffer: %s", gpu_get_error());
+    lovrAssertGoto(fail, stream, "Failed to begin command buffer: %s", gpu_get_error());
 
     // Timestamp Readback
     if (state.timingEnabled) {
       BufferView view = getBuffer(GPU_BUFFER_DOWNLOAD, 2 * count * sizeof(uint32_t), 4);
-      if (!view.buffer) return false;
+      if (!view.buffer) goto fail;
       gpu_copy_tally_buffer(stream, state.timestamps, view.buffer, 0, view.offset, 2 * count);
       Readback* readback = lovrReadbackCreateTimestamp(times, count, view);
-      if (!readback) return false;
+      if (!readback) goto fail;
       lovrRelease(readback, lovrReadbackDestroy); // It gets freed when it completes
     }
 
@@ -1863,7 +1875,7 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
       }
     }
 
-    lovrAssert(gpu_stream_end(stream), "Failed to end GPU command buffer: %s", gpu_get_error());
+    lovrAssertGoto(fail, gpu_stream_end(stream), "Failed to end GPU command buffer: %s", gpu_get_error());
   }
 
   // Cleanup
@@ -1895,7 +1907,7 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
     }
   }
 
-  lovrAssert(gpu_submit(streams, streamCount), "Failed to submit GPU command buffers: %s", gpu_get_error());
+  lovrAssertGoto(fail, gpu_submit(streams, streamCount), "Failed to submit GPU command buffers: %s", gpu_get_error());
 
   // All of the non-static buffers after the front of the 'current' list are the buffers that filled
   // up while this frame was being recorded.  Set their tick to the current tick and chain them onto
@@ -1915,9 +1927,13 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
     }
   }
 
+  stackPop(&thread.stack, stack);
   state.active = false;
   state.stream = NULL;
   return true;
+fail:
+  stackPop(&thread.stack, stack);
+  return false;
 }
 
 bool lovrGraphicsPresent(void) {
@@ -2936,7 +2952,7 @@ static glsl_include_result_t* includer(void* cb, const char* path, const char* i
   if (!strcmp(path, includer)) {
     return NULL;
   }
-  glsl_include_result_t* result = tempAlloc(&state.allocator, sizeof(*result));
+  glsl_include_result_t* result = allocate(&thread.stack, sizeof(*result));
   result->header_name = path;
   result->header_data = ((ShaderIncluder*) cb)(path, &result->header_length);
   if (!result->header_data) return NULL;
@@ -2972,6 +2988,8 @@ bool lovrGraphicsCompileShader(ShaderSource* stages, ShaderSource* outputs, uint
     lovrUnreachable();
   }
 
+  size_t stack = stackPush(&thread.stack);
+
   for (uint32_t i = 0; i < stageCount; i++) {
     ShaderSource* source = &stages[i];
 
@@ -3004,7 +3022,7 @@ bool lovrGraphicsCompileShader(ShaderSource* stages, ShaderSource* outputs, uint
     char* code = NULL;
 
     if (raw) {
-      code = tempAlloc(&state.allocator, source->size + 1);
+      code = allocate(&thread.stack, source->size + 1);
       memcpy(code, source->code, source->size);
       code[source->size] = '\0';
     } else {
@@ -3014,7 +3032,7 @@ bool lovrGraphicsCompileShader(ShaderSource* stages, ShaderSource* outputs, uint
       }
 
       size_t cursor = 0;
-      code = tempAlloc(&state.allocator, totalLength + 1);
+      code = allocate(&thread.stack, totalLength + 1);
       for (size_t i = 0; i < COUNTOF(strings); i++) {
         memcpy(code + cursor, strings[i], lengths[i]);
         cursor += lengths[i];
@@ -3051,16 +3069,12 @@ bool lovrGraphicsCompileShader(ShaderSource* stages, ShaderSource* outputs, uint
 
     if (!glslang_shader_preprocess(shaders[i], &input)) {
       lovrSetError("Could not preprocess %s shader:\n%s", stageNames[source->stage], glslang_shader_get_info_log(shaders[i]));
-      glslang_shader_delete(shaders[i]);
-      glslang_program_delete(program);
-      return false;
+      goto fail;
     }
 
     if (!glslang_shader_parse(shaders[i], &input)) {
       lovrSetError("Could not parse %s shader:\n%s", stageNames[source->stage], glslang_shader_get_info_log(shaders[i]));
-      glslang_shader_delete(shaders[i]);
-      glslang_program_delete(program);
-      return false;
+      goto fail;
     }
 
     glslang_program_add_shader(program, shaders[i]);
@@ -3068,19 +3082,18 @@ bool lovrGraphicsCompileShader(ShaderSource* stages, ShaderSource* outputs, uint
 
   // We might not need to do anything if all the inputs were already SPIR-V
   if (!program) {
+    stackPop(&thread.stack, stack);
     return true;
   }
 
   if (!glslang_program_link(program, 0)) {
     lovrSetError("Could not link shader:\n%s", glslang_program_get_info_log(program));
-    glslang_program_delete(program);
-    return false;
+    goto fail;
   }
 
   if (!glslang_program_map_io(program)) {
     lovrSetError("Could not map shader IO:\n%s", glslang_program_get_info_log(program));
-    glslang_program_delete(program);
-    return false;
+    goto fail;
   }
 
   glslang_spv_options_t spvOptions = { 0 };
@@ -3116,7 +3129,15 @@ bool lovrGraphicsCompileShader(ShaderSource* stages, ShaderSource* outputs, uint
   }
 
   glslang_program_delete(program);
+  stackPop(&thread.stack, stack);
   return true;
+fail:
+  for (uint32_t i = 0; i < COUNTOF(shaders); i++) {
+    if (shaders[i]) glslang_shader_delete(shaders[i]);
+  }
+  if (program) glslang_program_delete(program);
+  stackPop(&thread.stack, stack);
+  return false;
 #else
   return lovrSetError("Could not compile shader: No shader compiler available");
 #endif
@@ -3269,7 +3290,7 @@ Shader* lovrGraphicsGetDefaultShader(DefaultShader type) {
 }
 
 Shader* lovrShaderCreate(const ShaderInfo* info) {
-  size_t stack = tempPush(&state.allocator);
+  size_t stack = stackPush(&thread.stack);
 
   Shader* shader = lovrCalloc(sizeof(Shader) + gpu_sizeof_shader());
   shader->ref = 1;
@@ -3297,7 +3318,7 @@ Shader* lovrShaderCreate(const ShaderInfo* info) {
   // Copy the source to temp memory (we perform edits on the SPIR-V and the input might be readonly)
   void* source[2];
   for (uint32_t i = 0; i < info->stageCount; i++) {
-    source[i] = tempAlloc(&state.allocator, info->stages[i].size);
+    source[i] = allocate(&thread.stack, info->stages[i].size);
     memcpy(source[i], info->stages[i].code, info->stages[i].size);
   }
 
@@ -3313,11 +3334,11 @@ Shader* lovrShaderCreate(const ShaderInfo* info) {
     lovrAssertGoto(fail, result == SPV_OK, "Failed to load Shader: %s", spv_result_to_string(result));
     lovrAssertGoto(fail, spv[i].version <= 0x00010300, "Invalid SPIR-V version (up to 1.3 is supported)");
 
-    spv[i].features = tempAlloc(&state.allocator, spv[i].featureCount * sizeof(uint32_t));
-    spv[i].specConstants = tempAlloc(&state.allocator, spv[i].specConstantCount * sizeof(spv_spec_constant));
-    spv[i].attributes = tempAlloc(&state.allocator, spv[i].attributeCount * sizeof(spv_attribute));
-    spv[i].resources = tempAlloc(&state.allocator, spv[i].resourceCount * sizeof(spv_resource));
-    spv[i].fields = tempAlloc(&state.allocator, spv[i].fieldCount * sizeof(spv_field));
+    spv[i].features = allocate(&thread.stack, spv[i].featureCount * sizeof(uint32_t));
+    spv[i].specConstants = allocate(&thread.stack, spv[i].specConstantCount * sizeof(spv_spec_constant));
+    spv[i].attributes = allocate(&thread.stack, spv[i].attributeCount * sizeof(spv_attribute));
+    spv[i].resources = allocate(&thread.stack, spv[i].resourceCount * sizeof(spv_resource));
+    spv[i].fields = allocate(&thread.stack, spv[i].fieldCount * sizeof(spv_field));
     if (spv[i].fields) memset(spv[i].fields, 0, spv[i].fieldCount * sizeof(spv_field));
 
     result = spv_parse(source[i], info->stages[i].size, &spv[i]);
@@ -3597,7 +3618,7 @@ Shader* lovrShaderCreate(const ShaderInfo* info) {
   }
 
   // Layout
-  gpu_slot* slots = tempAlloc(&state.allocator, shader->resourceCount * sizeof(gpu_slot));
+  gpu_slot* slots = allocate(&thread.stack, shader->resourceCount * sizeof(gpu_slot));
   for (uint32_t i = 0; i < shader->resourceCount; i++) {
     ShaderResource* resource = &shader->resources[i];
     slots[i] = (gpu_slot) {
@@ -3618,7 +3639,7 @@ Shader* lovrShaderCreate(const ShaderInfo* info) {
 
   gpu_shader_info gpu = {
     .stageCount = info->stageCount,
-    .stages = tempAlloc(&state.allocator, info->stageCount * sizeof(gpu_shader_source)),
+    .stages = allocate(&thread.stack, info->stageCount * sizeof(gpu_shader_source)),
     .label = info->label
   };
 
@@ -3660,10 +3681,10 @@ Shader* lovrShaderCreate(const ShaderInfo* info) {
     goto fail;
   }
 
-  tempPop(&state.allocator, stack);
+  stackPop(&thread.stack, stack);
   return shader;
 fail:
-  tempPop(&state.allocator, stack);
+  stackPop(&thread.stack, stack);
   lovrShaderDestroy(shader);
   return NULL;
 }
@@ -4218,8 +4239,8 @@ static Glyph* lovrFontGetGlyph(Font* font, uint32_t codepoint, bool* resized) {
   font->atlasX += pixelWidth;
   font->rowHeight = MAX(font->rowHeight, pixelHeight);
 
-  size_t stack = tempPush(&state.allocator);
-  float* pixels = tempAlloc(&state.allocator, pixelWidth * pixelHeight * 4 * sizeof(float));
+  size_t stack = stackPush(&thread.stack);
+  float* pixels = allocate(&thread.stack, pixelWidth * pixelHeight * 4 * sizeof(float));
   lovrRasterizerGetPixels(font->info.rasterizer, codepoint, pixels, pixelWidth, pixelHeight, font->info.spread);
   float* src = pixels;
   uint8_t* dst = bufferView.pointer;
@@ -4234,7 +4255,7 @@ static Glyph* lovrFontGetGlyph(Font* font, uint32_t codepoint, bool* resized) {
   uint32_t dstOffset[4] = { glyph->x - font->padding, glyph->y - font->padding, 0, 0 };
   uint32_t extent[3] = { pixelWidth, pixelHeight, 1 };
   gpu_copy_buffer_texture(state.stream, bufferView.buffer, font->atlas->gpu, bufferView.offset, dstOffset, extent);
-  tempPop(&state.allocator, stack);
+  stackPop(&thread.stack, stack);
 
   state.barrier.prev |= GPU_PHASE_COPY;
   state.barrier.next |= GPU_PHASE_SHADER_FRAGMENT;
@@ -4291,8 +4312,8 @@ void lovrFontGetLines(Font* font, ColoredString* strings, uint32_t count, float 
     totalLength += strings[i].length;
   }
 
-  size_t stack = tempPush(&state.allocator);
-  char* string = tempAlloc(&state.allocator, totalLength + 1);
+  size_t stack = stackPush(&thread.stack);
+  char* string = allocate(&thread.stack, totalLength + 1);
   string[totalLength] = '\0';
 
   size_t cursor = 0;
@@ -4361,7 +4382,7 @@ void lovrFontGetLines(Font* font, ColoredString* strings, uint32_t count, float 
     callback(context, lineStart, end - lineStart);
   }
 
-  tempPop(&state.allocator, stack);
+  stackPop(&thread.stack, stack);
 }
 
 static void aline(GlyphVertex* vertices, uint32_t head, uint32_t tail, float width, HorizontalAlign align) {
@@ -5000,9 +5021,9 @@ Model* lovrModelCreate(const ModelInfo* info) {
   // Within each section, primitives are still sorted by their index
   // All of a node's primitives will remain together, since skin/blend shapes are per-node
 
-  stack = tempPush(&state.allocator);
-  uint64_t* primitiveOrder = tempAlloc(&state.allocator, data->primitiveCount * sizeof(uint64_t));
-  uint32_t* baseVertex = tempAlloc(&state.allocator, data->primitiveCount * sizeof(uint32_t));
+  stack = stackPush(&thread.stack);
+  uint64_t* primitiveOrder = allocate(&thread.stack, data->primitiveCount * sizeof(uint64_t));
+  uint32_t* baseVertex = allocate(&thread.stack, data->primitiveCount * sizeof(uint32_t));
 
   // The sort key only has 31 bits for the skin
   lovrCheckGoto(fail, data->skinCount < (1u << 31), "Too many skins!");
@@ -5132,11 +5153,11 @@ Model* lovrModelCreate(const ModelInfo* info) {
   model->globalTransforms = lovrMalloc(16 * sizeof(float) * data->nodeCount);
   lovrModelResetNodeTransforms(model);
 
-  tempPop(&state.allocator, stack);
+  stackPop(&thread.stack, stack);
 
   return model;
 fail:
-  if (stack) tempPop(&state.allocator, stack);
+  if (stack) stackPop(&thread.stack, stack);
   lovrModelDestroy(model);
   return NULL;
 }
@@ -5282,7 +5303,7 @@ bool lovrModelAnimate(Model* model, uint32_t animationIndex, float time, float a
   ModelAnimation* animation = &data->animations[animationIndex];
   time = fmodf(time, animation->duration);
 
-  size_t stack = tempPush(&state.allocator);
+  size_t stack = stackPush(&thread.stack);
 
   for (uint32_t i = 0; i < animation->channelCount; i++) {
     ModelAnimationChannel* channel = &animation->channels[i];
@@ -5301,7 +5322,7 @@ bool lovrModelAnimate(Model* model, uint32_t animationIndex, float time, float a
       case PROP_WEIGHTS: n = data->nodes[node].blendShapeCount; break;
     }
 
-    float* property = tempAlloc(&state.allocator, n * sizeof(float));
+    float* property = allocate(&thread.stack, n * sizeof(float));
 
     // Handle the first/last keyframe case (no interpolation)
     if (keyframe == 0 || keyframe >= channel->keyframeCount) {
@@ -5378,7 +5399,7 @@ bool lovrModelAnimate(Model* model, uint32_t animationIndex, float time, float a
     }
   }
 
-  tempPop(&state.allocator, stack);
+  stackPop(&thread.stack, stack);
   return true;
 }
 
@@ -5758,7 +5779,7 @@ Image* lovrReadbackGetImage(Readback* readback) {
 // Pass
 
 static void* lovrPassAllocate(Pass* pass, size_t size) {
-  return tempAlloc(&pass->allocator, size);
+  return allocate(&pass->allocator, size);
 }
 
 static BufferView lovrPassGetBuffer(Pass* pass, uint32_t size, size_t align) {
@@ -5834,11 +5855,7 @@ Pass* lovrPassCreate(const char* label) {
   Pass* pass = lovrCalloc(sizeof(Pass));
   pass->ref = 1;
 
-  pass->allocator.limit = 1 << 28;
-  pass->allocator.length = 1 << 12;
-  pass->allocator.memory = os_vm_init(pass->allocator.limit);
-  lovrAssert(pass->allocator.memory, "Out of memory");
-  os_vm_commit(pass->allocator.memory, pass->allocator.length);
+  initAllocator(&pass->allocator);
 
   if (label) {
     size_t size = strlen(label) + 1;
@@ -5866,7 +5883,7 @@ void lovrPassDestroy(void* ref) {
     lovrRelease(pass->tally.tempBuffer, lovrBufferDestroy);
   }
   destroyBuffers(&pass->buffers);
-  os_vm_free(pass->allocator.memory, pass->allocator.limit);
+  lovrFree(pass->allocator.memory);
   lovrFree(pass->label);
   lovrFree(pass);
 }
@@ -5940,7 +5957,7 @@ void lovrPassReset(Pass* pass) {
 const PassStats* lovrPassGetStats(Pass* pass) {
   pass->stats.draws = pass->drawCount;
   pass->stats.computes = pass->computeCount;
-  pass->stats.cpuMemoryReserved = pass->allocator.length;
+  pass->stats.cpuMemoryReserved = pass->allocator.cursor;
   pass->stats.cpuMemoryUsed = pass->allocator.cursor;
   return &pass->stats;
 }
@@ -7789,8 +7806,8 @@ bool lovrPassText(Pass* pass, ColoredString* strings, uint32_t count, float* tra
     return false;
   }
 
-  size_t stack = tempPush(&state.allocator);
-  GlyphVertex* vertices = tempAlloc(&state.allocator, totalLength * 4 * sizeof(GlyphVertex));
+  size_t stack = stackPush(&thread.stack);
+  GlyphVertex* vertices = allocate(&thread.stack, totalLength * 4 * sizeof(GlyphVertex));
   uint32_t glyphCount;
   uint32_t lineCount;
 
@@ -7802,7 +7819,7 @@ bool lovrPassText(Pass* pass, ColoredString* strings, uint32_t count, float* tra
   Material* material;
   bool flip = pass->cameras[(pass->cameraCount - 1) * pass->canvas.views].projection[5] > 0.f;
   if (!lovrFontGetVertices(font, strings, count, wrap, halign, valign, vertices, &glyphCount, &lineCount, &material, flip)) {
-    tempPop(&state.allocator, stack);
+    stackPop(&thread.stack, stack);
     return false;
   }
 
@@ -7826,7 +7843,7 @@ bool lovrPassText(Pass* pass, ColoredString* strings, uint32_t count, float* tra
   };
 
   if (!lovrPassDraw(pass, &draw)) {
-    tempPop(&state.allocator, stack);
+    stackPop(&thread.stack, stack);
     return false;
   }
 
@@ -7838,7 +7855,7 @@ bool lovrPassText(Pass* pass, ColoredString* strings, uint32_t count, float* tra
     indices += COUNTOF(quad);
   }
 
-  tempPop(&state.allocator, stack);
+  stackPop(&thread.stack, stack);
   return true;
 }
 
@@ -8180,30 +8197,33 @@ void lovrPassBarrier(Pass* pass) {
 
 // Helpers
 
-static void* tempAlloc(Allocator* allocator, size_t size) {
+static void initAllocator(Allocator* allocator) {
+  allocator->cursor = 0;
+  allocator->limit = 1 << 26;
+  allocator->memory = lovrMalloc(allocator->limit);
+}
+
+static void* allocate(Allocator* allocator, size_t size) {
   if (size == 0) {
     return NULL;
   }
 
-  while (allocator->cursor + size > allocator->length) {
-    if ((allocator->length << 1) > allocator->limit) {
-      fprintf(stderr, "Out of memory");
-      abort();
-    }
-    os_vm_commit(allocator->memory + allocator->length, allocator->length);
-    allocator->length <<= 1;
+  uint32_t cursor = ALIGN(allocator->cursor, 8);
+
+  if (cursor + size > allocator->limit) {
+    fprintf(stderr, "Out of memory");
+    abort();
   }
 
-  uint32_t cursor = ALIGN(allocator->cursor, 8);
   allocator->cursor = cursor + size;
   return allocator->memory + cursor;
 }
 
-static size_t tempPush(Allocator* allocator) {
+static size_t stackPush(Allocator* allocator) {
   return allocator->cursor;
 }
 
-static void tempPop(Allocator* allocator, size_t stack) {
+static void stackPop(Allocator* allocator, size_t stack) {
   allocator->cursor = stack;
 }
 
@@ -8335,7 +8355,6 @@ static bool beginFrame(void) {
     state.active = true;
     memset(&state.barrier, 0, sizeof(gpu_barrier));
     memset(&state.transferBarrier, 0, sizeof(gpu_barrier));
-    state.allocator.cursor = 0;
     processReadbacks();
   }
 
@@ -8353,10 +8372,8 @@ static bool beginFrame(void) {
 // memory used by Font:getLines and Pass:text).
 static void flushTransfers(void) {
   if (state.active) {
-    size_t cursor = state.allocator.cursor;
     lovrGraphicsSubmit(NULL, 0);
     beginFrame();
-    state.allocator.cursor = cursor;
   }
 }
 
