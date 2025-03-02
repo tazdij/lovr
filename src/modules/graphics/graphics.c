@@ -421,9 +421,7 @@ typedef struct {
   Texture* texture;
   Texture* resolve;
   TextureFormat format;
-  LoadAction load;
-  float clear[4];
-  bool automsaa;
+  bool temporary;
 } Attachment;
 
 typedef struct {
@@ -435,6 +433,7 @@ typedef struct {
   uint32_t height;
   uint32_t views;
   uint32_t samples;
+  gpu_canvas gpu;
 } Canvas;
 
 typedef struct {
@@ -566,12 +565,6 @@ typedef struct {
   uint32_t tail;
 } MaterialBlock;
 
-typedef struct {
-  gpu_texture* texture;
-  uint32_t hash;
-  uint32_t tick;
-} ScratchTexture;
-
 static thread_local struct {
   Allocator stack;
 } thread;
@@ -609,7 +602,6 @@ static struct {
   size_t materialBlock;
   arr_t(MaterialBlock) materialBlocks;
   BufferAllocator bufferAllocators[4];
-  arr_t(ScratchTexture) scratchTextures;
   map_t pipelineLookup;
   gpu_pipeline* pipelines;
   uint32_t pipelineCount;
@@ -638,7 +630,7 @@ static void flushTransfers(void);
 static void processReadbacks(void);
 static Layout* getLayout(gpu_slot* slots, uint32_t count);
 static gpu_bundle* getBundle(Layout* layout, gpu_binding* bindings, uint32_t count);
-static gpu_texture* getScratchTexture(gpu_stream* stream, Canvas* canvas, Attachment* attachment);
+static gpu_texture* createTemporaryTexture(gpu_stream* stream, Canvas* canvas, Attachment* attachment);
 static bool isDepthFormat(TextureFormat format);
 static bool supportsSRGB(TextureFormat format);
 static uint32_t measureTexture(TextureFormat format, uint32_t w, uint32_t h, uint32_t d);
@@ -708,7 +700,6 @@ bool lovrGraphicsInit(GraphicsConfig* config) {
 
   map_init(&state.pipelineLookup, 64);
   arr_init(&state.materialBlocks);
-  arr_init(&state.scratchTextures);
 
   gpu_slot builtinSlots[] = {
     { 0, GPU_SLOT_UNIFORM_BUFFER, GPU_STAGE_GRAPHICS }, // Globals
@@ -921,11 +912,6 @@ void lovrGraphicsDestroy(void) {
     lovrFree(block->bundles);
   }
   arr_free(&state.materialBlocks);
-  for (size_t i = 0; i < state.scratchTextures.length; i++) {
-    gpu_texture_destroy(state.scratchTextures.data[i].texture);
-    lovrFree(state.scratchTextures.data[i].texture);
-  }
-  arr_free(&state.scratchTextures);
   for (uint32_t i = 0; i < state.pipelineCount; i++) {
     gpu_pipeline_destroy(getPipeline(i));
   }
@@ -1141,47 +1127,6 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
 
   // Canvas
 
-  gpu_canvas target = { 0 };
-  Attachment* color = canvas->color;
-  Attachment* depth = &canvas->depth;
-
-  for (uint32_t i = 0; i < canvas->count; i++, color++) {
-    target.color[i] = (gpu_color_attachment) {
-      .texture = color->automsaa ? getScratchTexture(stream, canvas, color) : color->texture->renderView,
-      .resolve = color->automsaa ? color->texture->renderView : (color->resolve ? color->resolve->renderView : NULL),
-      .load = (gpu_load_op) color->load,
-      .save = color->resolve || color->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP,
-      .clear[0] = color->clear[0],
-      .clear[1] = color->clear[1],
-      .clear[2] = color->clear[2],
-      .clear[3] = color->clear[3]
-    };
-
-    if (color->automsaa && !target.color[i].texture) {
-      return false;
-    }
-  }
-
-  if (depth->texture || depth->format) {
-    target.depth = (gpu_depth_attachment) {
-      .texture = depth->automsaa ? getScratchTexture(stream, canvas, depth) : depth->texture->renderView,
-      .resolve = depth->automsaa && depth->texture ? depth->texture->renderView : (depth->resolve ? depth->resolve->renderView : NULL),
-      .load = (gpu_load_op) depth->load,
-      .save = depth->resolve || depth->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP,
-      .stencilLoad = (gpu_load_op) depth->load,
-      .stencilSave = depth->resolve || depth->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP,
-      .clear = depth->clear[0]
-    };
-
-    if (depth->automsaa && !target.depth.texture) {
-      return false;
-    }
-  }
-
-  target.width = canvas->width;
-  target.height = canvas->height;
-  target.foveation = canvas->foveation ? canvas->foveation->gpu : NULL;
-
   uint32_t min[2] = { ~0u, ~0u };
   uint32_t max[2] = { 0, 0 };
 
@@ -1193,10 +1138,10 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
     max[1] = MAX(max[1], scissor[1] + scissor[3]);
   }
 
-  target.area[0] = min[0];
-  target.area[1] = min[1];
-  target.area[2] = max[0] - min[0];
-  target.area[3] = max[1] - min[1];
+  canvas->gpu.area[0] = min[0];
+  canvas->gpu.area[1] = min[1];
+  canvas->gpu.area[2] = max[0] - min[0];
+  canvas->gpu.area[3] = max[1] - min[1];
 
   // Cameras
 
@@ -1300,8 +1245,8 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
   pass->stats.drawsCulled = pass->drawCount - activeDrawCount;
 
   if (activeDrawCount == 0) {
-    gpu_render_begin(stream, &target);
-    gpu_render_end(stream, &target);
+    gpu_render_begin(stream, &canvas->gpu);
+    gpu_render_end(stream, &canvas->gpu);
     return true;
   }
 
@@ -1470,7 +1415,7 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
   uint32_t uniformSize = 0;
   gpu_bundle* uniformBundle = NULL;
 
-  gpu_render_begin(stream, &target);
+  gpu_render_begin(stream, &canvas->gpu);
   gpu_bind_vertex_buffers(stream, &state.defaultBuffer->gpu, &state.defaultBuffer->base, 1, 1);
 
   for (uint32_t i = 0; i < activeDrawCount; i++) {
@@ -1572,7 +1517,7 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
     gpu_tally_finish(stream, pass->tally.gpu, tally * canvas->views);
   }
 
-  gpu_render_end(stream, &target);
+  gpu_render_end(stream, &canvas->gpu);
 
   // Automipmap
 
@@ -1655,7 +1600,7 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
 
 static Readback* lovrReadbackCreateTimestamp(TimingInfo* passes, uint32_t count, BufferView view);
 
-static void syncAttachment(Attachment* attachment, Texture* texture, bool depth, bool resolve) {
+static void syncAttachment(Attachment* attachment, Texture* texture, bool depth, bool resolve, bool load) {
   if (!texture) return;
 
   Access access = {
@@ -1663,10 +1608,10 @@ static void syncAttachment(Attachment* attachment, Texture* texture, bool depth,
     .object = texture
   };
 
-  bool read = !resolve && !attachment->automsaa && attachment->load == LOAD_KEEP;
+  bool read = !attachment->temporary && load;
 
   // Depth resolve operations act like color resolves w.r.t. sync
-  if (!depth || resolve || attachment->automsaa) {
+  if (!depth || resolve || attachment->temporary) {
     access.phase = GPU_PHASE_COLOR;
     access.cache = GPU_CACHE_COLOR_WRITE | (read ? GPU_CACHE_COLOR_READ : 0);
   } else {
@@ -1734,17 +1679,19 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
     // Color attachments
     for (uint32_t a = 0; a < canvas->count; a++) {
       Attachment* attachment = &canvas->color[a];
+      bool load = canvas->gpu.color[a].load == GPU_LOAD_OP_KEEP;
       if (attachment->texture == state.window) continue;
-      syncAttachment(attachment, attachment->texture, false, false);
-      syncAttachment(attachment, attachment->resolve, false, true);
+      syncAttachment(attachment, attachment->texture, false, false, load);
+      syncAttachment(attachment, attachment->resolve, false, true, false);
       xrCanvas |= attachment->texture->info.xr || (attachment->resolve && attachment->resolve->info.xr);
     }
 
     // Depth attachment
     if (canvas->depth.texture) {
       Attachment* attachment = &canvas->depth;
-      syncAttachment(attachment, attachment->texture, true, false);
-      syncAttachment(attachment, attachment->resolve, true, true);
+      bool load = canvas->gpu.depth.load == GPU_LOAD_OP_KEEP;
+      syncAttachment(attachment, attachment->texture, true, false, load);
+      syncAttachment(attachment, attachment->resolve, true, true, false);
       xrCanvas |= attachment->texture->info.xr || (attachment->resolve && attachment->resolve->info.xr);
     }
 
@@ -5837,7 +5784,7 @@ bool lovrGraphicsGetWindowPass(Pass** pass) {
   }
 
   lovrPassReset(state.windowPass);
-  memcpy(state.windowPass->canvas.color[0].clear, state.background, 4 * sizeof(float));
+  memcpy(state.windowPass->canvas.gpu.color[0].clear, state.background, 4 * sizeof(float));
   CanvasTexture color[4] = { [0].texture = window };
   lovrPassSetCanvas(state.windowPass, color, NULL, state.depthFormat, NULL, state.config.antialias ? 4 : 1);
   *pass = state.windowPass;
@@ -5862,14 +5809,8 @@ Pass* lovrPassCreate(const char* label) {
 
 void lovrPassDestroy(void* ref) {
   Pass* pass = ref;
-  lovrPassRelease(pass);
-  for (uint32_t i = 0; i < COUNTOF(pass->canvas.color); i++) {
-    lovrRelease(pass->canvas.color[i].texture, lovrTextureDestroy);
-    lovrRelease(pass->canvas.color[i].resolve, lovrTextureDestroy);
-  }
-  lovrRelease(pass->canvas.depth.texture, lovrTextureDestroy);
-  lovrRelease(pass->canvas.depth.resolve, lovrTextureDestroy);
-  lovrRelease(pass->canvas.foveation, lovrTextureDestroy);
+  // This releases canvas textures and resets the pass, which releases references held by draws
+  lovrPassSetCanvas(pass, NULL, NULL, 0, NULL, 0);
   lovrRelease(pass->tally.buffer, lovrBufferDestroy);
   if (pass->tally.gpu) {
     gpu_tally_destroy(pass->tally.gpu);
@@ -5984,10 +5925,22 @@ bool lovrPassSetCanvas(Pass* pass, CanvasTexture color[4], CanvasTexture* depth,
   Canvas* canvas = &pass->canvas;
 
   for (uint32_t i = 0; i < canvas->count; i++) {
+    if (canvas->color[i].temporary) {
+      gpu_texture_destroy(canvas->gpu.color[i].texture);
+      lovrFree(canvas->gpu.color[i].texture);
+      canvas->color[i].temporary = false;
+    }
+
     lovrRelease(canvas->color[i].texture, lovrTextureDestroy);
     lovrRelease(canvas->color[i].resolve, lovrTextureDestroy);
     canvas->color[i].texture = NULL;
     canvas->color[i].resolve = NULL;
+  }
+
+  if (canvas->depth.temporary) {
+    gpu_texture_destroy(canvas->gpu.depth.texture);
+    lovrFree(canvas->gpu.depth.texture);
+    canvas->depth.temporary = false;
   }
 
   lovrRelease(canvas->depth.texture, lovrTextureDestroy);
@@ -6081,7 +6034,7 @@ bool lovrPassSetCanvas(Pass* pass, CanvasTexture color[4], CanvasTexture* depth,
     canvas->color[i].texture = color[i].texture;
     canvas->color[i].resolve = color[i].resolve;
     canvas->color[i].format = color[i].texture->info.format;
-    canvas->color[i].automsaa = color[i].texture->info.samples == 1 && samples > 1;
+    canvas->color[i].temporary = color[i].texture->info.samples == 1 && samples > 1;
     lovrRetain(color[i].texture);
     lovrRetain(color[i].resolve);
   }
@@ -6090,49 +6043,109 @@ bool lovrPassSetCanvas(Pass* pass, CanvasTexture color[4], CanvasTexture* depth,
     canvas->depth.texture = depth->texture;
     canvas->depth.resolve = depth->resolve;
     canvas->depth.format = depth->texture->info.format;
-    canvas->depth.automsaa = depth->texture->info.samples == 1 && samples > 1;
+    canvas->depth.temporary = depth->texture->info.samples == 1 && samples > 1;
     lovrRetain(depth->texture);
     lovrRetain(depth->resolve);
   } else {
     canvas->depth.format = depthFormat;
-    canvas->depth.automsaa = true;
+    canvas->depth.temporary = true;
   }
 
   lovrRetain(foveation);
   canvas->foveation = foveation;
+
+  // gpu_canvas
+
+  if (!beginFrame()) {
+    lovrPassSetCanvas(pass, NULL, NULL, 0, NULL, 0);
+    return false;
+  }
+
+  gpu_canvas* target = &canvas->gpu;
+
+  target->width = canvas->width;
+  target->height = canvas->height;
+
+  Attachment* attachment = canvas->color;
+  for (uint32_t i = 0; i < count; i++, attachment++) {
+    if (attachment->temporary) {
+      if ((target->color[i].texture = createTemporaryTexture(state.stream, canvas, attachment)) == NULL) {
+        lovrPassSetCanvas(pass, NULL, NULL, 0, NULL, 0);
+        return false;
+      }
+
+      target->color[i].resolve = attachment->texture->renderView;
+      target->color[i].save = GPU_SAVE_OP_DISCARD;
+    } else {
+      target->color[i].texture = attachment->texture->renderView;
+      target->color[i].resolve = attachment->resolve ? attachment->resolve->renderView : NULL;
+      target->color[i].save = attachment->resolve ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP;
+    }
+  }
+
+  for (uint32_t i = count; i < COUNTOF(target->color); i++) {
+    target->color[i].texture = NULL;
+    target->color[i].resolve = NULL;
+  }
+
+  attachment = &canvas->depth;
+  if (attachment->texture || attachment->format) {
+    if (attachment->temporary) {
+      if ((target->depth.texture = createTemporaryTexture(state.stream, canvas, attachment)) == NULL) {
+        lovrPassSetCanvas(pass, NULL, NULL, 0, NULL, 0);
+        return false;
+      }
+
+      target->depth.resolve = attachment->texture ? attachment->texture->renderView : NULL;
+      target->depth.save = GPU_SAVE_OP_DISCARD;
+    } else {
+      target->depth.texture = attachment->texture->renderView;
+      target->depth.resolve = attachment->resolve ? attachment->resolve->renderView : NULL;
+      target->depth.save = attachment->resolve ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP;
+      target->depth.stencilSave = target->depth.save;
+    }
+  } else {
+    target->depth.texture = NULL;
+    target->depth.resolve = NULL;
+  }
+
+  target->foveation = canvas->foveation ? canvas->foveation->gpu : NULL;
 
   lovrPassReset(pass);
   return true;
 }
 
 void lovrPassGetClear(Pass* pass, LoadAction loads[4], float clears[4][4], LoadAction* depthLoad, float* depthClear) {
+  gpu_canvas* target = &pass->canvas.gpu;
   for (uint32_t i = 0; i < pass->canvas.count; i++) {
-    loads[i] = pass->canvas.color[i].load;
-    if (pass->canvas.color[i].load == LOAD_CLEAR) {
-      clears[i][0] = lovrMathLinearToGamma(pass->canvas.color[i].clear[0]);
-      clears[i][1] = lovrMathLinearToGamma(pass->canvas.color[i].clear[1]);
-      clears[i][2] = lovrMathLinearToGamma(pass->canvas.color[i].clear[2]);
-      clears[i][3] = pass->canvas.color[i].clear[3];
+    loads[i] = (LoadAction) target->color[i].load;
+    if (target->color[i].load == GPU_LOAD_OP_CLEAR) {
+      clears[i][0] = lovrMathLinearToGamma(target->color[i].clear[0]);
+      clears[i][1] = lovrMathLinearToGamma(target->color[i].clear[1]);
+      clears[i][2] = lovrMathLinearToGamma(target->color[i].clear[2]);
+      clears[i][3] = target->color[i].clear[3];
     }
   }
-  *depthLoad = pass->canvas.depth.load;
-  *depthClear = pass->canvas.depth.clear[0];
+  *depthLoad = (LoadAction) target->depth.load;
+  *depthClear = target->depth.clear;
 }
 
 bool lovrPassSetClear(Pass* pass, LoadAction loads[4], float clears[4][4], LoadAction depthLoad, float depthClear) {
+  gpu_canvas* target = &pass->canvas.gpu;
   for (uint32_t i = 0; i < pass->canvas.count; i++) {
-    pass->canvas.color[i].load = loads[i];
+    target->color[i].load = (gpu_load_op) loads[i];
     if (loads[i] == LOAD_CLEAR) {
-      pass->canvas.color[i].clear[0] = lovrMathGammaToLinear(clears[i][0]);
-      pass->canvas.color[i].clear[1] = lovrMathGammaToLinear(clears[i][1]);
-      pass->canvas.color[i].clear[2] = lovrMathGammaToLinear(clears[i][2]);
-      pass->canvas.color[i].clear[3] = clears[i][3];
+      target->color[i].clear[0] = lovrMathGammaToLinear(clears[i][0]);
+      target->color[i].clear[1] = lovrMathGammaToLinear(clears[i][1]);
+      target->color[i].clear[2] = lovrMathGammaToLinear(clears[i][2]);
+      target->color[i].clear[3] = clears[i][3];
     } else {
-      memset(pass->canvas.color[i].clear, 0, 4 * sizeof(float));
+      memset(target->color[i].clear, 0, 4 * sizeof(float));
     }
   }
-  pass->canvas.depth.load = depthLoad;
-  pass->canvas.depth.clear[0] = depthLoad == LOAD_CLEAR ? depthClear : 0.f;
+  target->depth.load = (gpu_load_op) depthLoad;
+  target->depth.stencilLoad = (gpu_load_op) depthLoad;
+  target->depth.clear = depthLoad == LOAD_CLEAR ? depthClear : 0.f;
   return true;
 }
 
@@ -8489,39 +8502,11 @@ write:
   return bundle;
 }
 
-static gpu_texture* getScratchTexture(gpu_stream* stream, Canvas* canvas, Attachment* attachment) {
-  bool srgb = attachment->texture ? attachment->texture->info.srgb : false;
-  uint16_t key[] = { canvas->width, canvas->height, canvas->views, attachment->format, srgb, canvas->samples };
-  uint32_t hash = (uint32_t) hash64(key, sizeof(key));
-
-  // Find a matching scratch texture that hasn't been used this frame
-  for (uint32_t i = 0; i < state.scratchTextures.length; i++) {
-    if (state.scratchTextures.data[i].hash == hash && state.scratchTextures.data[i].tick != state.tick) {
-      return state.scratchTextures.data[i].texture;
-    }
-  }
-
-  // Find something to evict
-  ScratchTexture* scratch = NULL;
-  for (uint32_t i = 0; i < state.scratchTextures.length; i++) {
-    if (state.tick - state.scratchTextures.data[i].tick > 16) {
-      scratch = &state.scratchTextures.data[i];
-      break;
-    }
-  }
-
-  if (scratch) {
-    gpu_texture_destroy(scratch->texture);
-  } else {
-    arr_expand(&state.scratchTextures, 1);
-    scratch = &state.scratchTextures.data[state.scratchTextures.length++];
-    scratch->texture = lovrCalloc(gpu_sizeof_texture());
-  }
-
+static gpu_texture* createTemporaryTexture(gpu_stream* stream, Canvas* canvas, Attachment* attachment) {
   gpu_texture_info info = {
     .type = GPU_TEXTURE_ARRAY,
     .format = (gpu_texture_format) attachment->format,
-    .srgb = srgb,
+    .srgb = attachment->texture ? attachment->texture->info.srgb : false,
     .size = { canvas->width, canvas->height, canvas->views },
     .mipmaps = 1,
     .samples = canvas->samples,
@@ -8529,10 +8514,14 @@ static gpu_texture* getScratchTexture(gpu_stream* stream, Canvas* canvas, Attach
     .upload.stream = stream
   };
 
-  gpu_texture_init(scratch->texture, &info);
-  scratch->hash = hash;
-  scratch->tick = state.tick;
-  return scratch->texture;
+  gpu_texture* texture = lovrMalloc(gpu_sizeof_texture());
+
+  if (!gpu_texture_init(texture, &info)) {
+    lovrFree(texture);
+    return NULL;
+  }
+
+  return texture;
 }
 
 static bool isDepthFormat(TextureFormat format) {
