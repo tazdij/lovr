@@ -25,7 +25,7 @@
 #include "resource_limits_c.h"
 #endif
 
-#define MAX_PIPELINES 65536
+#define MAX_PIPELINES 8192
 #define MAX_TALLIES 255
 #define TRANSFORM_STACK_SIZE 16
 #define PIPELINE_STACK_SIZE 8
@@ -565,6 +565,13 @@ typedef struct {
   uint32_t tail;
 } MaterialBlock;
 
+typedef struct PipelineJob {
+  struct PipelineJob* next;
+  uint64_t hash;
+  gpu_pipeline_info* info;
+  gpu_pipeline* pipeline;
+} PipelineJob;
+
 static thread_local struct {
   Allocator stack;
 } thread;
@@ -602,6 +609,7 @@ static struct {
   size_t materialBlock;
   arr_t(MaterialBlock) materialBlocks;
   BufferAllocator bufferAllocators[4];
+  PipelineJob* pipelineJobs;
   map_t pipelineLookup;
   gpu_pipeline* pipelines;
   uint32_t pipelineCount;
@@ -695,10 +703,9 @@ bool lovrGraphicsInit(GraphicsConfig* config) {
   state.config = *config;
   state.timingEnabled = config->debug;
 
-  state.pipelines = os_vm_init(MAX_PIPELINES * gpu_sizeof_pipeline());
-  lovrAssertGoto(fail, state.pipelines, "Failed to allocate memory for pipelines");
-
+  state.pipelines = lovrMalloc(MAX_PIPELINES * gpu_sizeof_pipeline());
   map_init(&state.pipelineLookup, 64);
+
   arr_init(&state.materialBlocks);
 
   gpu_slot builtinSlots[] = {
@@ -915,7 +922,7 @@ void lovrGraphicsDestroy(void) {
   for (uint32_t i = 0; i < state.pipelineCount; i++) {
     gpu_pipeline_destroy(getPipeline(i));
   }
-  os_vm_free(state.pipelines, MAX_PIPELINES * gpu_sizeof_pipeline());
+  lovrFree(state.pipelines);
   map_free(&state.pipelineLookup);
   for (size_t i = 0; i < COUNTOF(state.bufferAllocators); i++) {
     destroyBuffers(&state.bufferAllocators[i]);
@@ -1315,35 +1322,66 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
 
   // Pipelines
 
-  if (!pass->draws[pass->drawCount - 1].pipeline) {
-    uint32_t first = 0;
+  Draw* draw = pass->draws;
+  Draw* previous = NULL;
 
-    while (pass->draws[first].pipeline) {
-      first++; // TODO could binary search or cache
+  for (uint32_t i = 0; i < pass->drawCount; i++, previous = draw, draw++) {
+    // If the draw uses the same pipeline as the previous draw, use that
+    if (previous && draw->pipelineInfo == previous->pipelineInfo) {
+      draw->pipeline = previous->pipeline;
+      continue;
     }
 
-    for (uint32_t i = first; i < pass->drawCount; i++) {
-      Draw* prev = &pass->draws[i - 1];
-      Draw* draw = &pass->draws[i];
+    // Otherwise, look up the pipeline in the global lookup table
+    uint64_t hash = hash64(draw->pipelineInfo, sizeof(gpu_pipeline_info));
+    uint64_t value = map_get(&state.pipelineLookup, hash);
 
-      if (i > 0 && draw->pipelineInfo == prev->pipelineInfo) {
-        draw->pipeline = prev->pipeline;
-        continue;
-      }
-
-      uint64_t hash = hash64(draw->pipelineInfo, sizeof(gpu_pipeline_info));
-      uint64_t index = map_get(&state.pipelineLookup, hash);
-
-      if (index == MAP_NIL) {
-        index = state.pipelineCount++;
-        lovrAssert(index < MAX_PIPELINES, "Too many pipelines!");
-        lovrAssert(os_vm_commit(state.pipelines, state.pipelineCount * gpu_sizeof_pipeline()), "Out of memory");
-        lovrAssert(gpu_pipeline_init_graphics(getPipeline(index), draw->pipelineInfo), "Failed to create GPU pipeline: %s", gpu_get_error());
-        map_set(&state.pipelineLookup, hash, index);
-      }
-
-      draw->pipeline = getPipeline(index);
+    if (value != MAP_NIL) {
+      draw->pipeline = (gpu_pipeline*) (uintptr_t) value;
+      continue;
     }
+
+    // If it's not in the global lookup, search through the linked list of new pipelines
+    PipelineJob* node = atomic_load(&state.pipelineJobs);
+    bool found = false;
+
+    while (node) {
+      if (node->hash == hash) {
+        draw->pipeline = node->pipeline;
+        found = true;
+        break;
+      } else {
+        node = node->next;
+      }
+    }
+
+    if (found) {
+      continue;
+    }
+
+    // If we couldn't find a pipeline to use, compile a new one
+    uint32_t index = atomic_fetch_add(&state.pipelineCount, 1);
+
+    if (index >= MAX_PIPELINES) {
+      lovrSetError("Too many pipelines!");
+      return false;
+    }
+
+    PipelineJob* job = allocate(&thread.stack, sizeof(PipelineJob));
+    job->next = NULL;
+    job->hash = hash;
+    job->info = draw->pipelineInfo;
+    job->pipeline = getPipeline(index);
+
+    lovrAssert(gpu_pipeline_init_graphics(job->pipeline, job->info), "Failed to create GPU pipeline: %s", gpu_get_error());
+
+    // Chain the new pipeline on to the list of new pipelines
+    job->next = atomic_load(&state.pipelineJobs);
+    while (!atomic_compare_exchange_strong(&state.pipelineJobs, &job->next, job)) {
+      continue;
+    }
+
+    draw->pipeline = job->pipeline;
   }
 
   // Bundles
@@ -1845,6 +1883,15 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
         block->tick = state.tick;
       }
     }
+
+    // Merge any new pipelines into the global pipeline lookup
+    for (PipelineJob* job = atomic_load(&state.pipelineJobs); job; job = job->next) {
+      if (map_get(&state.pipelineLookup, job->hash) == MAP_NIL) {
+        map_set(&state.pipelineLookup, job->hash, (uint64_t) (uintptr_t) job->pipeline);
+      }
+    }
+
+    atomic_store(&state.pipelineJobs, NULL);
   }
 
   lovrAssertGoto(fail, gpu_submit(streams, streamCount), "Failed to submit GPU command buffers: %s", gpu_get_error());
@@ -3135,9 +3182,9 @@ static bool lovrShaderInit(Shader* shader) {
       .flagCount = shader->overrideCount
     };
 
-    lovrAssert(state.pipelineCount < MAX_PIPELINES, "Too many pipelines!");
-    shader->computePipeline = getPipeline(state.pipelineCount++);
-    lovrAssert(os_vm_commit(state.pipelines, state.pipelineCount * gpu_sizeof_pipeline()), "Out of pipeline memory");
+    uint32_t index = atomic_fetch_add(&state.pipelineCount, 1);
+    lovrAssert(index < MAX_PIPELINES, "Too many pipelines!");
+    shader->computePipeline = getPipeline(index);
     lovrAssert(gpu_pipeline_init_compute(shader->computePipeline, &pipelineInfo), "Failed to create compute shader pipeline: %s", gpu_get_error());
   }
 
