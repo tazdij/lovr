@@ -33,10 +33,6 @@ struct gpu_bundle {
   WGPUBindGroup handle;
 };
 
-struct gpu_pass {
-  gpu_pass_info info;
-};
-
 struct gpu_pipeline {
   WGPURenderPipeline render;
   WGPUComputePipeline compute;
@@ -61,7 +57,6 @@ size_t gpu_sizeof_layout(void) { return sizeof(gpu_layout); }
 size_t gpu_sizeof_shader(void) { return sizeof(gpu_shader); }
 size_t gpu_sizeof_bundle_pool(void) { return sizeof(gpu_bundle_pool); }
 size_t gpu_sizeof_bundle(void) { return sizeof(gpu_bundle); }
-size_t gpu_sizeof_pass(void) { return sizeof(gpu_pass); }
 size_t gpu_sizeof_pipeline(void) { return sizeof(gpu_pipeline); }
 size_t gpu_sizeof_tally(void) { return sizeof(gpu_tally); }
 
@@ -420,17 +415,6 @@ void gpu_bundle_write(gpu_bundle** bundles, gpu_bundle_info* infos, uint32_t cou
   }
 }
 
-// Pass
-
-bool gpu_pass_init(gpu_pass* pass, gpu_pass_info* info) {
-  pass->info = *info;
-  return true;
-}
-
-void gpu_pass_destroy(gpu_pass* pass) {
-  //
-}
-
 // Pipeline
 
 bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info) {
@@ -571,7 +555,7 @@ bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info)
   };
 
   WGPUDepthStencilState depth = {
-    .format = convertFormat(info->pass->info.depth.format, false),
+    .format = convertFormat(info->depth.format, false),
     .depthWriteEnabled = info->depth.write,
     .depthCompare = compares[info->depth.test],
     .stencilFront = stencil,
@@ -590,21 +574,21 @@ bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info)
 
   WGPUBlendState blends[4];
   WGPUColorTargetState targets[4];
-  for (uint32_t i = 0; i < info->pass->info.colorCount; i++) {
+  for (uint32_t i = 0; i < info->attachmentCount; i++) {
     targets[i] = (WGPUColorTargetState) {
-      .format = convertFormat(info->pass->info.color[i].format, info->pass->info.color[i].srgb),
-      .blend = info->blend[i].enabled ? &blends[i] : NULL,
-      .writeMask = info->colorMask[i]
+      .format = convertFormat(info->color[i].format, info->color[i].srgb),
+      .blend = info->color[i].blend.enabled ? &blends[i] : NULL,
+      .writeMask = info->color[i].mask
     };
 
     if (info->blend[i].enabled) {
       blends[i] = (WGPUBlendState) {
-        .color.operation = blendOps[info->blend[i].color.op],
-        .color.srcFactor = blendFactors[info->blend[i].color.src],
-        .color.dstFactor = blendFactors[info->blend[i].color.dst],
-        .alpha.operation = blendOps[info->blend[i].alpha.op],
-        .alpha.srcFactor = blendFactors[info->blend[i].alpha.src],
-        .alpha.dstFactor = blendFactors[info->blend[i].alpha.dst]
+        .color.operation = blendOps[info->color[i].blend.color.op],
+        .color.srcFactor = blendFactors[info->color[i].blend.color.src],
+        .color.dstFactor = blendFactors[info->color[i].blend.color.dst],
+        .alpha.operation = blendOps[info->color[i].blend.alpha.op],
+        .alpha.srcFactor = blendFactors[info->color[i].blend.alpha.src],
+        .alpha.dstFactor = blendFactors[info->color[i].blend.alpha.dst]
       };
     }
   }
@@ -612,7 +596,7 @@ bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info)
   WGPUFragmentState fragment = {
     .module = info->shader->handles[1],
     .entryPoint = "main",
-    .targetCount = info->pass->info.colorCount,
+    .targetCount = info->attachmentCount,
     .targets = targets
   };
 
@@ -621,7 +605,7 @@ bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info)
     .layout = info->shader->pipelineLayout,
     .vertex = vertex,
     .primitive = primitive,
-    .depthStencil = info->pass->info.depth.format ? &depth : NULL,
+    .depthStencil = info->depth.format ? &depth : NULL,
     .multisample = multisample,
     .fragment = &fragment
   };
@@ -697,14 +681,15 @@ void gpu_render_begin(gpu_stream* stream, gpu_canvas* canvas) {
     [GPU_LOAD_OP_DISCARD] = WGPUStoreOp_Discard
   };
 
+  uint32_t colorAttachmentCount = 0;
   WGPURenderPassColorAttachment colorAttachments[COUNTOF(canvas->color)];
 
-  for (uint32_t i = 0; i < canvas->pass->info.colorCount; i++) {
+  for (uint32_t i = 0; i < 4 && canvas->color[i].texture; i++, colorAttachmentCount++) {
     colorAttachments[i] = (WGPURenderPassColorAttachment) {
       .view = canvas->color[i].texture->view,
       .resolveTarget = canvas->color[i].resolve->view,
-      .loadOp = loadOps[canvas->pass->info.color[i].load],
-      .storeOp = storeOps[canvas->pass->info.color[i].save],
+      .loadOp = loadOps[canvas->color[i].load],
+      .storeOp = storeOps[canvas->color[i].save],
       .clearValue.r = canvas->color[i].clear[0],
       .clearValue.g = canvas->color[i].clear[1],
       .clearValue.b = canvas->color[i].clear[2],
@@ -714,18 +699,18 @@ void gpu_render_begin(gpu_stream* stream, gpu_canvas* canvas) {
 
   WGPURenderPassDepthStencilAttachment depth = {
     .view = canvas->depth.texture->view,
-    .depthLoadOp = loadOps[canvas->pass->info.depth.load],
-    .depthStoreOp = storeOps[canvas->pass->info.depth.save],
+    .depthLoadOp = loadOps[canvas->depth.load],
+    .depthStoreOp = storeOps[canvas->depth.save],
     .depthClearValue = canvas->depth.clear,
     .depthReadOnly = false,
-    .stencilLoadOp = loadOps[canvas->pass->info.depth.stencilLoad],
-    .stencilStoreOp = storeOps[canvas->pass->info.depth.stencilSave],
+    .stencilLoadOp = loadOps[canvas->depth.stencilLoad],
+    .stencilStoreOp = storeOps[canvas->depth.stencilSave],
     .stencilClearValue = 0,
     .stencilReadOnly = false
   };
 
   WGPURenderPassDescriptor info = {
-    .colorAttachmentCount = canvas->pass->info.colorCount,
+    .colorAttachmentCount = colorAttachmentCount,
     .colorAttachments = colorAttachments,
     .depthStencilAttachment = canvas->depth.texture ? &depth : NULL
   };

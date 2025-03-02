@@ -529,7 +529,6 @@ typedef struct {
 struct Pass {
   uint32_t ref;
   uint32_t flags;
-  gpu_pass* gpu;
   Allocator allocator;
   BufferAllocator buffers;
   CachedShape geocache[16];
@@ -611,7 +610,6 @@ static struct {
   arr_t(MaterialBlock) materialBlocks;
   BufferAllocator bufferAllocators[4];
   arr_t(ScratchTexture) scratchTextures;
-  map_t passLookup;
   map_t pipelineLookup;
   gpu_pipeline* pipelines;
   uint32_t pipelineCount;
@@ -638,7 +636,6 @@ static uint32_t lcm(uint32_t a, uint32_t b);
 static bool beginFrame(void);
 static void flushTransfers(void);
 static void processReadbacks(void);
-static gpu_pass* getPass(Canvas* canvas);
 static Layout* getLayout(gpu_slot* slots, uint32_t count);
 static gpu_bundle* getBundle(Layout* layout, gpu_binding* bindings, uint32_t count);
 static gpu_texture* getScratchTexture(gpu_stream* stream, Canvas* canvas, Attachment* attachment);
@@ -709,7 +706,6 @@ bool lovrGraphicsInit(GraphicsConfig* config) {
   state.pipelines = os_vm_init(MAX_PIPELINES * gpu_sizeof_pipeline());
   lovrAssertGoto(fail, state.pipelines, "Failed to allocate memory for pipelines");
 
-  map_init(&state.passLookup, 4);
   map_init(&state.pipelineLookup, 64);
   arr_init(&state.materialBlocks);
   arr_init(&state.scratchTextures);
@@ -935,14 +931,6 @@ void lovrGraphicsDestroy(void) {
   }
   os_vm_free(state.pipelines, MAX_PIPELINES * gpu_sizeof_pipeline());
   map_free(&state.pipelineLookup);
-  for (size_t i = 0; i < state.passLookup.size; i++) {
-    if (state.passLookup.values[i] != MAP_NIL) {
-      gpu_pass* pass = (gpu_pass*) (uintptr_t) state.passLookup.values[i];
-      gpu_pass_destroy(pass);
-      lovrFree(pass);
-    }
-  }
-  map_free(&state.passLookup);
   for (size_t i = 0; i < COUNTOF(state.bufferAllocators); i++) {
     destroyBuffers(&state.bufferAllocators[i]);
   }
@@ -1161,6 +1149,8 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
     target.color[i] = (gpu_color_attachment) {
       .texture = color->automsaa ? getScratchTexture(stream, canvas, color) : color->texture->renderView,
       .resolve = color->automsaa ? color->texture->renderView : (color->resolve ? color->resolve->renderView : NULL),
+      .load = (gpu_load_op) color->load,
+      .save = color->resolve || color->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP,
       .clear[0] = color->clear[0],
       .clear[1] = color->clear[1],
       .clear[2] = color->clear[2],
@@ -1176,6 +1166,10 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
     target.depth = (gpu_depth_attachment) {
       .texture = depth->automsaa ? getScratchTexture(stream, canvas, depth) : depth->texture->renderView,
       .resolve = depth->automsaa && depth->texture ? depth->texture->renderView : (depth->resolve ? depth->resolve->renderView : NULL),
+      .load = (gpu_load_op) depth->load,
+      .save = depth->resolve || depth->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP,
+      .stencilLoad = (gpu_load_op) depth->load,
+      .stencilSave = depth->resolve || depth->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP,
       .clear = depth->clear[0]
     };
 
@@ -1184,7 +1178,6 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
     }
   }
 
-  target.pass = pass->gpu;
   target.width = canvas->width;
   target.height = canvas->height;
   target.foveation = canvas->foveation ? canvas->foveation->gpu : NULL;
@@ -5920,7 +5913,6 @@ void lovrPassReset(Pass* pass) {
   pass->pipeline->color[1] = 1.f;
   pass->pipeline->color[2] = 1.f;
   pass->pipeline->color[3] = 1.f;
-  pass->pipeline->info.pass = pass->gpu;
   pass->pipeline->info.depth.test = GPU_COMPARE_GEQUAL;
   pass->pipeline->info.depth.write = true;
   pass->pipeline->info.stencil.testMask = 0xff;
@@ -5928,10 +5920,20 @@ void lovrPassReset(Pass* pass) {
 
   for (uint32_t i = 0; i < 4; i++) {
     lovrPassSetBlendMode(pass, i, BLEND_ALPHA, BLEND_ALPHA_MULTIPLY);
-    pass->pipeline->info.colorMask[i] = 0xf;
+    pass->pipeline->info.color[i].mask = 0xf;
   }
 
   Canvas* canvas = &pass->canvas;
+
+  for (uint32_t i = 0; i < canvas->count; i++) {
+    pass->pipeline->info.color[i].format = (gpu_texture_format) canvas->color[i].texture->info.format;
+    pass->pipeline->info.color[i].srgb = canvas->color[i].texture->info.srgb;
+  }
+
+  pass->pipeline->info.depth.format = (gpu_texture_format) (canvas->depth.texture ? canvas->depth.texture->info.format : canvas->depth.format);
+  pass->pipeline->info.multisample.count = canvas->samples;
+  pass->pipeline->info.attachmentCount = canvas->count;
+  pass->pipeline->info.viewCount = canvas->views;
 
   pass->cameraCount = 0;
   pass->viewportCount = 0;
@@ -6003,7 +6005,6 @@ bool lovrPassSetCanvas(Pass* pass, CanvasTexture color[4], CanvasTexture* depth,
   canvas->views = 0;
   canvas->samples = 0;
 
-  pass->gpu = NULL;
   lovrPassReset(pass);
 
   if ((!color || !color->texture) && (!depth || !depth->texture)) {
@@ -6100,12 +6101,6 @@ bool lovrPassSetCanvas(Pass* pass, CanvasTexture color[4], CanvasTexture* depth,
   lovrRetain(foveation);
   canvas->foveation = foveation;
 
-  pass->gpu = getPass(canvas);
-
-  if (!pass->gpu) {
-    return lovrPassSetCanvas(pass, NULL, NULL, 0, NULL, 0);
-  }
-
   lovrPassReset(pass);
   return true;
 }
@@ -6125,9 +6120,7 @@ void lovrPassGetClear(Pass* pass, LoadAction loads[4], float clears[4][4], LoadA
 }
 
 bool lovrPassSetClear(Pass* pass, LoadAction loads[4], float clears[4][4], LoadAction depthLoad, float depthClear) {
-  bool dirty = false;
   for (uint32_t i = 0; i < pass->canvas.count; i++) {
-    dirty |= loads[i] != pass->canvas.color[i].load;
     pass->canvas.color[i].load = loads[i];
     if (loads[i] == LOAD_CLEAR) {
       pass->canvas.color[i].clear[0] = lovrMathGammaToLinear(clears[i][0]);
@@ -6138,10 +6131,8 @@ bool lovrPassSetClear(Pass* pass, LoadAction loads[4], float clears[4][4], LoadA
       memset(pass->canvas.color[i].clear, 0, 4 * sizeof(float));
     }
   }
-  dirty |= depthLoad != pass->canvas.depth.load;
   pass->canvas.depth.load = depthLoad;
   pass->canvas.depth.clear[0] = depthLoad == LOAD_CLEAR ? depthClear : 0.f;
-  if (dirty) return (pass->gpu = getPass(&pass->canvas)) != NULL;
   return true;
 }
 
@@ -6268,12 +6259,12 @@ void lovrPassSetAlphaToCoverage(Pass* pass, bool enabled) {
 
 void lovrPassSetBlendMode(Pass* pass, uint32_t index, BlendMode mode, BlendAlphaMode alphaMode) {
   if (mode == BLEND_NONE) {
-    pass->pipeline->dirty |= pass->pipeline->info.blend[index].enabled;
-    memset(&pass->pipeline->info.blend[index], 0, sizeof(gpu_blend_state));
+    pass->pipeline->dirty |= pass->pipeline->info.color[index].blend.enabled;
+    memset(&pass->pipeline->info.color[index].blend, 0, sizeof(gpu_blend_state));
     return;
   }
 
-  gpu_blend_state* blend = &pass->pipeline->info.blend[index];
+  gpu_blend_state* blend = &pass->pipeline->info.color[index].blend;
 
   static const gpu_blend_state table[] = {
     [BLEND_ALPHA] = {
@@ -6325,8 +6316,8 @@ void lovrPassSetColor(Pass* pass, float color[4]) {
 
 void lovrPassSetColorWrite(Pass* pass, uint32_t index, bool r, bool g, bool b, bool a) {
   uint8_t mask = (r << 0) | (g << 1) | (b << 2) | (a << 3);
-  pass->pipeline->dirty |= pass->pipeline->info.colorMask[index] != mask;
-  pass->pipeline->info.colorMask[index] = mask;
+  pass->pipeline->dirty |= pass->pipeline->info.color[index].mask != mask;
+  pass->pipeline->info.color[index].mask = mask;
 }
 
 void lovrPassSetDepthTest(Pass* pass, CompareMode test) {
@@ -8409,53 +8400,6 @@ static void processReadbacks(void) {
   if (!state.oldestReadback) {
     state.newestReadback = NULL;
   }
-}
-
-static gpu_pass* getPass(Canvas* canvas) {
-  gpu_pass_info info = { 0 };
-
-  for (uint32_t i = 0; i < canvas->count; i++) {
-    Attachment* attachment = &canvas->color[i];
-    info.color[i].format = (gpu_texture_format) attachment->texture->info.format;
-    info.color[i].srgb = attachment->texture->info.srgb;
-    info.color[i].load = (gpu_load_op) attachment->load;
-    info.color[i].save = attachment->resolve || attachment->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP;
-    info.color[i].resolve = attachment->resolve || attachment->automsaa;
-  }
-
-  Attachment* depth = &canvas->depth;
-
-  if (depth->texture || depth->format) {
-    info.depth.format = (gpu_texture_format) (depth->texture ? depth->texture->info.format : depth->format);
-    info.depth.load = (gpu_load_op) depth->load;
-    info.depth.save = depth->resolve || depth->automsaa ? GPU_SAVE_OP_DISCARD : GPU_SAVE_OP_KEEP;
-    info.depth.stencilLoad = info.depth.load;
-    info.depth.stencilSave = info.depth.save;
-    info.depth.resolve = depth->resolve || (depth->texture && depth->automsaa);
-  }
-
-  info.colorCount = canvas->count;
-  info.samples = canvas->samples;
-  info.views = canvas->views;
-  info.foveated = !!canvas->foveation;
-  info.surface = canvas->count > 0 && canvas->color[0].texture == state.window;
-
-  uint64_t hash = hash64(&info, sizeof(info));
-  uint64_t value = map_get(&state.passLookup, hash);
-
-  if (value == MAP_NIL) {
-    gpu_pass* pass = lovrMalloc(gpu_sizeof_pass());
-
-    if (!gpu_pass_init(pass, &info)) {
-      lovrFree(pass);
-      return NULL;
-    }
-
-    map_set(&state.passLookup, hash, (uint64_t) (uintptr_t) pass);
-    return pass;
-  }
-
-  return (gpu_pass*) (uintptr_t) value;
 }
 
 static Layout* getLayout(gpu_slot* slots, uint32_t count) {
