@@ -524,7 +524,15 @@ typedef enum {
 typedef struct {
   Texture* texture;
   Texture* resolve;
-} CanvasTexture;
+} Attachment;
+
+typedef struct {
+  Attachment color[4];
+  Attachment depth;
+  Texture* foveation;
+  uint32_t depthFormat;
+  uint32_t samples;
+} Canvas;
 
 typedef enum {
   STACK_TRANSFORM,
@@ -581,8 +589,8 @@ void lovrPassReset(Pass* pass);
 const PassStats* lovrPassGetStats(Pass* pass);
 const char* lovrPassGetLabel(Pass* pass);
 
-void lovrPassGetCanvas(Pass* pass, CanvasTexture color[4], CanvasTexture* depth, uint32_t* depthFormat, Texture** foveation, uint32_t* samples);
-bool lovrPassSetCanvas(Pass* pass, CanvasTexture color[4], CanvasTexture* depth, uint32_t depthFormat, Texture* foveation, uint32_t samples);
+void lovrPassGetCanvas(Pass* pass, Canvas* canvas);
+bool lovrPassSetCanvas(Pass* pass, Canvas* canvas);
 void lovrPassGetClear(Pass* pass, LoadAction loads[4], float clears[4][4], LoadAction* depthLoad, float* depthClear);
 bool lovrPassSetClear(Pass* pass, LoadAction loads[4], float clears[4][4], LoadAction depthLoad, float depthClear);
 uint32_t lovrPassGetAttachmentCount(Pass* pass, bool* depth);

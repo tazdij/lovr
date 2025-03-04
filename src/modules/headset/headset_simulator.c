@@ -459,8 +459,13 @@ static bool simulator_getPass(Pass** pass) {
       return false;
     }
 
-    CanvasTexture color[4] = { [0].texture = state.texture };
-    if (!lovrPassSetCanvas(state.pass, color, NULL, state.depthFormat, NULL, state.config.antialias ? 4 : 1)) {
+    Canvas canvas = {
+      .color[0].texture = state.texture,
+      .depthFormat = state.depthFormat,
+      .samples = state.config.antialias ? 4 : 1
+    };
+
+    if (!lovrPassSetCanvas(state.pass, &canvas)) {
       return false;
     }
   }

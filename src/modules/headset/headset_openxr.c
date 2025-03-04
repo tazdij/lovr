@@ -3358,8 +3358,13 @@ static Pass* openxr_getLayerPass(Layer* layer) {
   Texture* texture = openxr_getLayerTexture(layer);
   if (!texture) return NULL;
 
-  CanvasTexture color[4] = { [0].texture = texture };
-  if (!lovrPassSetCanvas(layer->pass, color, NULL, state.depthFormat, NULL, state.config.antialias ? 4 : 1)) {
+  Canvas canvas = {
+    .color[0].texture = texture,
+    .depthFormat = state.depthFormat,
+    .samples = state.config.antialias ? 4 : 1
+  };
+
+  if (!lovrPassSetCanvas(layer->pass, &canvas)) {
     return NULL;
   }
 
@@ -3423,21 +3428,23 @@ static bool openxr_getPass(Pass** pass) {
     return true;
   }
 
-  CanvasTexture color[4] = { 0 };
-  CanvasTexture depth = { 0 };
+  Canvas canvas = {
+    .depthFormat = state.depthFormat,
+    .samples = state.config.antialias ? 4 : 1
+  };
 
-  if (!openxr_getTexture(&color[0].texture) || !openxr_getDepthTexture(&depth.texture)) {
+  if (!openxr_getTexture(&canvas.color[0].texture) || !openxr_getDepthTexture(&canvas.depth.texture)) {
     return false;
   }
 
-  if (!color[0].texture) {
+  if (!canvas.color[0].texture) {
     *pass = NULL;
     return true;
   }
 
-  Texture* foveation = state.swapchains[SWAPCHAIN_COLOR].foveationTextures[state.swapchains[SWAPCHAIN_COLOR].textureIndex];
+  canvas.foveation = state.swapchains[SWAPCHAIN_COLOR].foveationTextures[state.swapchains[SWAPCHAIN_COLOR].textureIndex];
 
-  if (!lovrPassSetCanvas(state.pass, color, &depth, state.depthFormat, foveation, state.config.antialias ? 4 : 1)) {
+  if (!lovrPassSetCanvas(state.pass, &canvas)) {
     return false;
   }
 

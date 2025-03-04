@@ -37,65 +37,61 @@ static int l_lovrPassGetLabel(lua_State* L) {
 static int l_lovrPassGetCanvas(lua_State* L) {
   Pass* pass = luax_checktype(L, 1, Pass);
 
-  CanvasTexture color[4];
-  CanvasTexture depth;
-  uint32_t depthFormat;
-  Texture* foveation;
-  uint32_t samples;
-  lovrPassGetCanvas(pass, color, &depth, &depthFormat, &foveation, &samples);
+  Canvas canvas;
+  lovrPassGetCanvas(pass, &canvas);
 
-  if (!color[0].texture && !depth.texture) {
+  if (!canvas.color[0].texture && !canvas.depth.texture) {
     lua_pushnil(L);
     return 1;
   }
 
   lua_newtable(L);
   bool anyResolve = false;
-  for (uint32_t i = 0; i < COUNTOF(color) && color[i].texture; i++) {
-    luax_pushtype(L, Texture, color[i].texture);
+  for (uint32_t i = 0; i < COUNTOF(canvas.color) && canvas.color[i].texture; i++) {
+    luax_pushtype(L, Texture, canvas.color[i].texture);
     lua_rawseti(L, -2, i + 1);
-    anyResolve |= color[i].resolve != NULL;
+    anyResolve |= canvas.color[i].resolve != NULL;
   }
 
   if (anyResolve) {
     lua_newtable(L);
-    for (uint32_t i = 0; i < COUNTOF(color); i++) {
-      luax_pushtype(L, Texture, color[i].resolve);
+    for (uint32_t i = 0; i < COUNTOF(canvas.color); i++) {
+      luax_pushtype(L, Texture, canvas.color[i].resolve);
       lua_rawseti(L, -2, i + 1);
     }
     lua_setfield(L, -2, "resolve");
   }
 
-  if (depth.texture) {
-    luax_pushtype(L, Texture, depth.texture);
+  if (canvas.depth.texture) {
+    luax_pushtype(L, Texture, canvas.depth.texture);
     lua_setfield(L, -2, "depth");
-  } else if (depthFormat) {
-    luax_pushenum(L, TextureFormat, depthFormat);
+  } else if (canvas.depthFormat) {
+    luax_pushenum(L, TextureFormat, canvas.depthFormat);
     lua_setfield(L, -2, "depth");
   }
 
-  lua_pushinteger(L, samples);
+  lua_pushinteger(L, canvas.samples);
   lua_setfield(L, -2, "samples");
   return 1;
 }
 
 int l_lovrPassSetCanvas(lua_State* L) {
   Pass* pass = luax_checktype(L, 1, Pass);
-  CanvasTexture color[4] = { 0 };
-  CanvasTexture depth = { 0 };
-  uint32_t depthFormat = FORMAT_D32F;
-  uint32_t samples = 4;
+  Canvas canvas = {
+    .depthFormat = FORMAT_D32F,
+    .samples = 4
+  };
   if (lua_istable(L, 2)) {
     lua_getfield(L, 2, "texture");
     if (lua_isnil(L, -1)) {
       int length = luax_len(L, 2);
       for (int i = 0; i < length && i < 4; i++) {
         lua_rawgeti(L, 2, i + 1);
-        color[i].texture = luax_checktype(L, -1, Texture);
+        canvas.color[i].texture = luax_checktype(L, -1, Texture);
         lua_pop(L, 1);
       }
     } else {
-      color[0].texture = luax_checktype(L, -1, Texture);
+      canvas.color[0].texture = luax_checktype(L, -1, Texture);
     }
     lua_pop(L, 1);
 
@@ -103,28 +99,28 @@ int l_lovrPassSetCanvas(lua_State* L) {
     if (lua_istable(L, -1)) {
       for (int i = 0; i < 4; i++) {
         lua_rawgeti(L, -1, i + 1);
-        color[i].resolve = luax_totype(L, -1, Texture);
+        canvas.color[i].resolve = luax_totype(L, -1, Texture);
         lua_pop(L, 1);
       }
     } else if (!lua_isnil(L, -1)) {
-      color[0].resolve = luax_checktype(L, -1, Texture);
+      canvas.color[0].resolve = luax_checktype(L, -1, Texture);
     }
     lua_pop(L, 1);
 
     lua_getfield(L, 2, "depth");
     switch (lua_type(L, -1)) {
-      case LUA_TUSERDATA: depth.texture = luax_checktype(L, -1, Texture); break;
-      case LUA_TSTRING: depthFormat = luax_checkenum(L, -1, TextureFormat, NULL); break;
-      case LUA_TBOOLEAN: depthFormat = lua_toboolean(L, -1) ? FORMAT_D32F : 0; break;
-      case LUA_TNIL: depthFormat = FORMAT_D32F; break;
+      case LUA_TUSERDATA: canvas.depth.texture = luax_checktype(L, -1, Texture); break;
+      case LUA_TSTRING: canvas.depthFormat = luax_checkenum(L, -1, TextureFormat, NULL); break;
+      case LUA_TBOOLEAN: canvas.depthFormat = lua_toboolean(L, -1) ? FORMAT_D32F : 0; break;
+      case LUA_TNIL: canvas.depthFormat = FORMAT_D32F; break;
       case LUA_TTABLE:
         lua_getfield(L, -1, "texture");
-        depth.texture = luax_totype(L, -1, Texture);
-        luax_check(L, depth.texture, "When depth is a table, it must have a 'texture' key with a Texture");
+        canvas.depth.texture = luax_totype(L, -1, Texture);
+        luax_check(L, canvas.depth.texture, "When depth is a table, it must have a 'texture' key with a Texture");
         lua_pop(L, 1);
 
         lua_getfield(L, -1, "resolve");
-        depth.resolve = lua_isnil(L, -1) ? NULL : luax_checktype(L, -1, Texture);
+        canvas.depth.resolve = lua_isnil(L, -1) ? NULL : luax_checktype(L, -1, Texture);
         lua_pop(L, 1);
         break;
       default: luaL_error(L, "Expected Texture, TextureFormat, boolean, table, or nil for canvas depth buffer");
@@ -132,17 +128,17 @@ int l_lovrPassSetCanvas(lua_State* L) {
     lua_pop(L, 1);
 
     lua_getfield(L, 2, "samples");
-    samples = luax_optu32(L, -1, samples);
+    canvas.samples = luax_optu32(L, -1, canvas.samples);
     lua_pop(L, 1);
   } else if (lua_isuserdata(L, 2)) {
     int top = lua_gettop(L);
     for (int i = 0; i + 2 <= top && i < 4; i++) {
-      color[i].texture = luax_checktype(L, i + 2, Texture);
+      canvas.color[i].texture = luax_checktype(L, i + 2, Texture);
     }
   } else if (!lua_isnoneornil(L, 2)) {
     luaL_error(L, "Expected Texture, table, or nil for canvas");
   }
-  luax_assert(L, lovrPassSetCanvas(pass, color, &depth, depthFormat, NULL, samples));
+  luax_assert(L, lovrPassSetCanvas(pass, &canvas));
   return 0;
 }
 
