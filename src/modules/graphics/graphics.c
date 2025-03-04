@@ -448,7 +448,7 @@ enum {
 typedef struct {
   uint32_t flags;
   Shader* shader;
-  gpu_bundle_info* bundleInfo;
+  gpu_binding* bindings;
   gpu_bundle* bundle;
   gpu_buffer* uniformBuffer;
   uint32_t uniformOffset;
@@ -480,8 +480,8 @@ typedef struct {
   Shader* shader;
   Material* material;
   gpu_pipeline_info* pipelineInfo;
-  gpu_bundle_info* bundleInfo;
   gpu_pipeline* pipeline;
+  gpu_binding* bindings;
   gpu_bundle* bundle;
   gpu_buffer* vertexBuffer;
   gpu_buffer* indexBuffer;
@@ -1049,7 +1049,7 @@ static bool recordComputePass(Pass* pass, gpu_stream* stream) {
   }
 
   gpu_pipeline* pipeline = NULL;
-  gpu_bundle_info* bundleInfo = NULL;
+  gpu_binding* bindings = NULL;
   gpu_bundle* uniformBundle = NULL;
   gpu_buffer* uniformBuffer = NULL;
   uint32_t uniformOffset = 0;
@@ -1065,11 +1065,11 @@ static bool recordComputePass(Pass* pass, gpu_stream* stream) {
       pipeline = compute->shader->computePipeline;
     }
 
-    if (compute->bundleInfo != bundleInfo) {
-      bundleInfo = compute->bundleInfo;
-      gpu_bundle* bundle = getBundle(compute->shader->layout, bundleInfo->bindings, bundleInfo->count);
+    if (compute->bindings != bindings) {
+      gpu_bundle* bundle = getBundle(compute->shader->layout, compute->bindings, compute->shader->resourceCount);
       if (!bundle) return false;
       gpu_bind_bundles(stream, compute->shader->gpu, &bundle, 0, 1, NULL, 0);
+      bindings = compute->bindings;
     }
 
     if (compute->uniformBuffer && (compute->uniformBuffer != uniformBuffer || compute->uniformOffset != uniformOffset)) {
@@ -1377,13 +1377,13 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
   for (uint32_t i = 0; i < activeDrawCount; i++) {
     Draw* draw = &pass->draws[activeDraws[i]];
 
-    if (i > 0 && draw->bundleInfo == prev->bundleInfo) {
+    if (i > 0 && draw->bindings == prev->bindings) {
       draw->bundle = prev->bundle;
       continue;
     }
 
-    if (draw->bundleInfo) {
-      draw->bundle = getBundle(draw->shader->layout, draw->bundleInfo->bindings, draw->bundleInfo->count);
+    if (draw->bindings) {
+      draw->bundle = getBundle(draw->shader->layout, draw->bindings, draw->shader->resourceCount);
       if (!draw->bundle) {
         return false;
       }
@@ -6869,7 +6869,7 @@ static void lovrPassResolvePipeline(Pass* pass, DrawInfo* info, Draw* draw, Draw
   }
 }
 
-static gpu_bundle_info* lovrPassResolveBindings(Pass* pass, Shader* shader, gpu_bundle_info* previous) {
+static gpu_binding* lovrPassResolveBindings(Pass* pass, Shader* shader, gpu_binding* previous) {
   if (shader->resourceCount == 0) {
     return NULL;
   }
@@ -6878,20 +6878,17 @@ static gpu_bundle_info* lovrPassResolveBindings(Pass* pass, Shader* shader, gpu_
     return previous;
   }
 
-  gpu_bundle_info* bundle = lovrPassAllocate(pass, sizeof(gpu_bundle_info));
-  bundle->bindings = lovrPassAllocate(pass, shader->resourceCount * sizeof(gpu_binding));
-  bundle->layout = shader->layout->gpu;
-  bundle->count = shader->resourceCount;
+  gpu_binding* bindings = lovrPassAllocate(pass, shader->resourceCount * sizeof(gpu_binding));
 
-  for (uint32_t i = 0; i < bundle->count; i++) {
-    bundle->bindings[i] = pass->bindings[shader->resources[i].binding];
-    bundle->bindings[i].type = shader->resources[i].type;
-    bundle->bindings[i].number = shader->resources[i].binding;
-    bundle->bindings[i].count = 0;
+  for (uint32_t i = 0; i < shader->resourceCount; i++) {
+    bindings[i] = pass->bindings[shader->resources[i].binding];
+    bindings[i].type = shader->resources[i].type;
+    bindings[i].number = shader->resources[i].binding;
+    bindings[i].count = 0;
   }
 
   pass->flags &= ~DIRTY_BINDINGS;
-  return bundle;
+  return bindings;
 }
 
 static bool lovrPassResolveUniforms(Pass* pass, Shader* shader, gpu_buffer** buffer, uint32_t* offset, void* previous) {
@@ -7013,7 +7010,7 @@ bool lovrPassDraw(Pass* pass, DrawInfo* info) {
   draw->baseVertex = info->baseVertex;
 
   lovrPassResolvePipeline(pass, info, draw, previous);
-  draw->bundleInfo = lovrPassResolveBindings(pass, draw->shader, previous ? previous->bundleInfo : NULL);
+  draw->bindings = lovrPassResolveBindings(pass, draw->shader, previous ? previous->bindings : NULL);
   if (!lovrPassResolveUniforms(pass, draw->shader, &draw->uniformBuffer, &draw->uniformOffset, previous)) return false;
   if (!lovrPassResolveVertices(pass, info, draw)) return false;
 
@@ -8196,7 +8193,7 @@ bool lovrPassMeshIndirect(Pass* pass, Buffer* vertices, Buffer* indices, Buffer*
   draw->indirect.stride = stride;
 
   lovrPassResolvePipeline(pass, &info, draw, previous);
-  draw->bundleInfo = lovrPassResolveBindings(pass, shader, previous ? previous->bundleInfo : NULL);
+  draw->bindings = lovrPassResolveBindings(pass, shader, previous ? previous->bindings : NULL);
   if (!lovrPassResolveUniforms(pass, draw->shader, &draw->uniformBuffer, &draw->uniformOffset, previous)) return false;
   if (!lovrPassResolveVertices(pass, &info, draw)) return false;
 
@@ -8256,7 +8253,7 @@ bool lovrPassCompute(Pass* pass, uint32_t x, uint32_t y, uint32_t z, Buffer* ind
 
   compute->flags = 0;
   compute->shader = shader;
-  compute->bundleInfo = lovrPassResolveBindings(pass, shader, previous ? previous->bundleInfo : NULL);
+  compute->bindings = lovrPassResolveBindings(pass, shader, previous ? previous->bindings : NULL);
   if (!lovrPassResolveUniforms(pass, shader, &compute->uniformBuffer, &compute->uniformOffset, previous)) return false;
   lovrRetain(shader);
 
