@@ -623,6 +623,7 @@ static void flushTransfers(void);
 static void processReadbacks(void);
 static Layout* getLayout(gpu_slot* slots, uint32_t count);
 static gpu_bundle* getBundle(Layout* layout, gpu_binding* bindings, uint32_t count);
+static bool getBundles(Layout* layout, gpu_bundle** bundles, uint32_t count);
 static gpu_texture* createTemporaryTexture(const TextureInfo* info, TextureFormat format, bool srgb, uint32_t samples);
 static bool isDepthFormat(TextureFormat format);
 static bool supportsSRGB(TextureFormat format);
@@ -8524,60 +8525,73 @@ static Layout* getLayout(gpu_slot* slots, uint32_t count) {
 }
 
 static gpu_bundle* getBundle(Layout* layout, gpu_binding* bindings, uint32_t count) {
-  BundlePool* pool = layout->head;
-  const uint32_t POOL_SIZE = 512;
-  gpu_bundle* bundle = NULL;
+  gpu_bundle* bundle;
 
-  if (pool) {
-    if (pool->cursor < POOL_SIZE) {
-      bundle = (gpu_bundle*) ((char*) pool->bundles + gpu_sizeof_bundle() * pool->cursor++);
-      goto write;
-    }
-
-    // If the pool's closed, move it to the end of the list and try to use the next pool
-    layout->tail->next = pool;
-    layout->tail = pool;
-    layout->head = pool->next;
-    pool->next = NULL;
-    pool->tick = state.tick;
-    pool = layout->head;
-
-    if (pool && gpu_is_complete(pool->tick)) {
-      bundle = pool->bundles;
-      pool->cursor = 1;
-      goto write;
-    }
-  }
-
-  // If no pool was available, make a new one
-  pool = lovrMalloc(sizeof(BundlePool));
-  gpu_bundle_pool* gpu = lovrMalloc(gpu_sizeof_bundle_pool());
-  gpu_bundle* bundles = lovrMalloc(POOL_SIZE * gpu_sizeof_bundle());
-  pool->gpu = gpu;
-  pool->bundles = bundles;
-  pool->cursor = 1;
-  pool->next = layout->head;
-
-  gpu_bundle_pool_info info = {
-    .bundles = pool->bundles,
-    .layout = layout->gpu,
-    .count = POOL_SIZE
-  };
-
-  if (!gpu_bundle_pool_init(pool->gpu, &info)) {
-    lovrSetError("Failed to allocate descriptor set: %s", gpu_get_error());
-    lovrFree(bundles);
-    lovrFree(gpu);
-    lovrFree(pool);
+  if (!getBundles(layout, &bundle, 1)) {
     return NULL;
   }
 
-  layout->head = pool;
-  if (!layout->tail) layout->tail = pool;
-  bundle = pool->bundles;
-write:
-  gpu_bundle_write(&bundle, &(gpu_bundle_info) { layout->gpu, bindings, count }, 1);
+  gpu_bundle_info info = {
+    .layout = layout->gpu,
+    .bindings = bindings,
+    .count = count
+  };
+
+  gpu_bundle_write(&bundle, &info, 1);
   return bundle;
+}
+
+static bool getBundles(Layout* layout, gpu_bundle** bundles, uint32_t count) {
+  const uint32_t POOL_SIZE = 512;
+  BundlePool* pool = layout->head;
+
+  while (count > 0) {
+    if (!pool || !gpu_is_complete(pool->tick)) {
+      pool = lovrMalloc(sizeof(BundlePool));
+      gpu_bundle_pool* gpu = lovrMalloc(gpu_sizeof_bundle_pool());
+      gpu_bundle* bundles = lovrMalloc(POOL_SIZE * gpu_sizeof_bundle());
+      pool->gpu = gpu;
+      pool->bundles = bundles;
+      pool->cursor = 0;
+      pool->next = layout->head;
+
+      gpu_bundle_pool_info info = {
+        .bundles = pool->bundles,
+        .layout = layout->gpu,
+        .count = POOL_SIZE
+      };
+
+      if (!gpu_bundle_pool_init(pool->gpu, &info)) {
+        lovrSetError("Failed to allocate descriptor pool: %s", gpu_get_error());
+        lovrFree(bundles);
+        lovrFree(gpu);
+        lovrFree(pool);
+        return false;
+      }
+
+      layout->head = pool;
+      if (!layout->tail) layout->tail = pool;
+    }
+
+    uint32_t available = POOL_SIZE - pool->cursor;
+    uint32_t chunk = MIN(count, available);
+
+    for (uint32_t i = 0; i < chunk; i++, pool->cursor++, count--) {
+      *bundles++ = (gpu_bundle*) ((char*) pool->bundles + gpu_sizeof_bundle() * pool->cursor);
+    }
+
+    if (pool->cursor >= POOL_SIZE) {
+      layout->tail->next = pool;
+      layout->tail = pool;
+      layout->head = pool->next;
+      pool->next = NULL;
+      pool->tick = state.tick;
+      pool->cursor = 0;
+      pool = layout->head;
+    }
+  }
+
+  return true;
 }
 
 static gpu_texture* createTemporaryTexture(const TextureInfo* size, TextureFormat format, bool srgb, uint32_t samples) {
