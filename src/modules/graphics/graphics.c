@@ -1912,6 +1912,7 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
   return true;
 fail:
   stackPop(&thread.stack, stack);
+  atomic_store(&state.pipelineJobs, NULL);
   return false;
 }
 
