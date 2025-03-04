@@ -1596,14 +1596,6 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
       .clear = GPU_CACHE_STORAGE_READ
     };
 
-    Access access = {
-      .sync = &tally->buffer->sync,
-      .object = tally->buffer,
-      .phase = GPU_PHASE_SHADER_COMPUTE,
-      .cache = GPU_CACHE_STORAGE_WRITE
-    };
-
-    syncResource(&access, &barrier);
     gpu_sync(stream, &barrier, 1);
 
     gpu_binding bindings[] = {
@@ -1732,6 +1724,19 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
       for (uint64_t j = 0; j < block->count; j++) {
         syncResource(&block->list[j], block->list[j].sync->barrier);
       }
+    }
+
+    // Tally buffer (we write to it with a compute shader after the render pass)
+    if (pass->tally.buffer && pass->tally.count > 0) {
+      Access access = {
+        .sync = &pass->tally.buffer->sync,
+        .object = pass->tally.buffer,
+        .phase = GPU_PHASE_SHADER_COMPUTE,
+        .cache = GPU_CACHE_STORAGE_WRITE
+      };
+
+      syncResource(&access, access.sync->barrier);
+      access.sync->barrier = &renderBarriers[i];
     }
   }
 
