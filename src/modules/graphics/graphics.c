@@ -166,14 +166,24 @@ struct Shader {
   char* names;
 };
 
+typedef struct {
+  void* next;
+  Material* materials;
+  BufferView view;
+  gpu_bundle_pool* bundlePool;
+  gpu_bundle* bundles;
+  uint32_t head;
+  uint32_t tail;
+} MaterialBlock;
+
 struct Material {
   uint32_t ref;
   uint32_t next;
   uint32_t tick;
-  uint16_t index;
-  uint16_t block;
-  gpu_bundle* bundle;
+  uint32_t index;
   MaterialInfo info;
+  gpu_bundle* bundle;
+  MaterialBlock* block;
   bool hasWritableTexture;
 };
 
@@ -541,15 +551,6 @@ struct Pass {
   char* label;
 };
 
-typedef struct {
-  Material* list;
-  BufferView view;
-  gpu_bundle_pool* bundlePool;
-  gpu_bundle* bundles;
-  uint32_t head;
-  uint32_t tail;
-} MaterialBlock;
-
 typedef struct PipelineJob {
   struct PipelineJob* next;
   uint64_t hash;
@@ -585,14 +586,13 @@ static struct {
   Font* defaultFont;
   Buffer* defaultBuffer;
   Texture* defaultTexture;
+  Material* defaultMaterial;
   Sampler* defaultSamplers[2];
   Shader* defaultShaders[DEFAULT_SHADER_COUNT];
   gpu_vertex_format vertexFormats[VERTEX_FORMAT_COUNT];
   Readback* oldestReadback;
   Readback* newestReadback;
-  Material* defaultMaterial;
-  size_t materialBlock;
-  arr_t(MaterialBlock) materialBlocks;
+  MaterialBlock* materials;
   BufferAllocator bufferAllocators[4];
   PipelineJob* pipelineJobs;
   map_t pipelineLookup;
@@ -691,8 +691,6 @@ bool lovrGraphicsInit(GraphicsConfig* config) {
   state.pipelines = lovrMalloc(MAX_PIPELINES * gpu_sizeof_pipeline());
   map_init(&state.pipelineLookup, 64);
 
-  arr_init(&state.materialBlocks);
-
   gpu_slot builtinSlots[] = {
     { 0, GPU_SLOT_UNIFORM_BUFFER, GPU_STAGE_GRAPHICS }, // Globals
     { 1, GPU_SLOT_UNIFORM_BUFFER_DYNAMIC, GPU_STAGE_GRAPHICS }, // Cameras
@@ -768,6 +766,19 @@ bool lovrGraphicsInit(GraphicsConfig* config) {
   lovrRelease(image, lovrImageDestroy);
   if (!state.defaultTexture) goto fail;
 
+  // Default Material
+
+  state.defaultMaterial = lovrMaterialCreate(&(MaterialInfo) {
+    .data.color = { 1.f, 1.f, 1.f, 1.f },
+    .data.uvScale = { 1.f, 1.f },
+    .data.metalness = 0.f,
+    .data.roughness = 1.f,
+    .data.normalScale = 1.f,
+    .texture = state.defaultTexture
+  });
+
+  if (!state.defaultMaterial) goto fail;
+
   // Default Samplers
 
   for (uint32_t i = 0; i < 2; i++) {
@@ -840,17 +851,6 @@ bool lovrGraphicsInit(GraphicsConfig* config) {
     .attributes[4] = { 1, 14, 0, GPU_TYPE_F32x4 }
   };
 
-  state.defaultMaterial = lovrMaterialCreate(&(MaterialInfo) {
-    .data.color = { 1.f, 1.f, 1.f, 1.f },
-    .data.uvScale = { 1.f, 1.f },
-    .data.metalness = 0.f,
-    .data.roughness = 1.f,
-    .data.normalScale = 1.f,
-    .texture = state.defaultTexture
-  });
-
-  if (!state.defaultMaterial) goto fail;
-
   float16Init();
 #ifdef LOVR_USE_GLSLANG
   glslang_initialize_process();
@@ -889,21 +889,23 @@ void lovrGraphicsDestroy(void) {
   lovrRelease(state.defaultFont, lovrFontDestroy);
   lovrRelease(state.defaultBuffer, lovrBufferDestroy);
   lovrRelease(state.defaultTexture, lovrTextureDestroy);
+  lovrRelease(state.defaultMaterial, lovrMaterialDestroy);
   lovrRelease(state.defaultSamplers[0], lovrSamplerDestroy);
   lovrRelease(state.defaultSamplers[1], lovrSamplerDestroy);
   for (size_t i = 0; i < COUNTOF(state.defaultShaders); i++) {
     lovrRelease(state.defaultShaders[i], lovrShaderDestroy);
   }
-  lovrRelease(state.defaultMaterial, lovrMaterialDestroy);
-  for (size_t i = 0; i < state.materialBlocks.length; i++) {
-    MaterialBlock* block = &state.materialBlocks.data[i];
+  MaterialBlock* block = state.materials;
+  while (block) {
+    MaterialBlock* next = block->next;
     gpu_bundle_pool_destroy(block->bundlePool);
     releaseBlock(block->view.block);
-    lovrFree(block->list);
+    lovrFree(block->materials);
     lovrFree(block->bundlePool);
     lovrFree(block->bundles);
+    lovrFree(block);
+    block = next;
   }
-  arr_free(&state.materialBlocks);
   for (uint32_t i = 0; i < state.pipelineCount; i++) {
     gpu_pipeline_destroy(getPipeline(i));
   }
@@ -3795,77 +3797,69 @@ Material* lovrMaterialCreate(const MaterialInfo* info) {
   for (uint32_t i = 0; i < COUNTOF(textures); i++) {
     if (!textures[i]) continue;
     lovrCheck(i == 0 || textures[i]->info.type == TEXTURE_2D, "Material textures must be 2D");
-    lovrCheck(textures[i]->info.samples == 1, "Material textures can not be multisample");
+    lovrCheck(textures[i]->info.samples == 1, "Material textures can not be multisampled");
     lovrCheck(textures[i]->info.usage & TEXTURE_SAMPLE, "Textures must be created with the 'sample' usage to use them in Materials");
   }
 
-  MaterialBlock* block = state.materialBlocks.length > 0 ? &state.materialBlocks.data[state.materialBlock] : NULL;
-  const uint32_t MATERIALS_PER_BLOCK = 256;
+  MaterialBlock* block = NULL;
 
-  if (!block || block->head == ~0u || !gpu_is_complete(block->list[block->head].tick)) {
-    bool found = false;
-
-    for (size_t i = 0; i < state.materialBlocks.length; i++) {
-      block = &state.materialBlocks.data[i];
-      if (block->head != ~0u && gpu_is_complete(block->list[block->head].tick)) {
-        state.materialBlock = i;
-        found = true;
-        break;
-      }
-    }
-
-    if (!found) {
-      arr_expand(&state.materialBlocks, 1);
-      lovrAssert(state.materialBlocks.length < UINT16_MAX, "Out of memory");
-      uint16_t blockIndex = (uint16_t) state.materialBlocks.length;
-      block = &state.materialBlocks.data[blockIndex];
-      block->list = lovrMalloc(MATERIALS_PER_BLOCK * sizeof(Material));
-      block->bundlePool = lovrMalloc(gpu_sizeof_bundle_pool());
-      block->bundles = lovrMalloc(MATERIALS_PER_BLOCK * gpu_sizeof_bundle());
-
-      for (uint32_t i = 0; i < MATERIALS_PER_BLOCK; i++) {
-        block->list[i].next = i + 1;
-        block->list[i].tick = 0;
-        block->list[i].block = blockIndex;
-        block->list[i].index = i;
-        block->list[i].bundle = (gpu_bundle*) ((char*) block->bundles + i * gpu_sizeof_bundle());
-        block->list[i].hasWritableTexture = false;
-      }
-      block->list[MATERIALS_PER_BLOCK - 1].next = ~0u;
-      block->tail = MATERIALS_PER_BLOCK - 1;
-      block->head = 0;
-
-      gpu_bundle_pool_info poolInfo = {
-        .bundles = block->bundles,
-        .layout = state.materialLayout->gpu,
-        .count = MATERIALS_PER_BLOCK
-      };
-
-      if (!gpu_bundle_pool_init(block->bundlePool, &poolInfo)) {
-        lovrFree(block->list);
-        lovrFree(block->bundlePool);
-        lovrFree(block->bundles);
-        return NULL;
-      }
-
-      size_t align = state.limits.uniformBufferAlign;
-      uint32_t bufferSize = MATERIALS_PER_BLOCK * (uint32_t) ALIGN(sizeof(MaterialData), align);
-      block->view = getBuffer(GPU_BUFFER_STATIC, bufferSize, align);
-
-      if (!block->view.buffer) {
-        lovrFree(block->list);
-        lovrFree(block->bundlePool);
-        lovrFree(block->bundles);
-        gpu_bundle_pool_destroy(block->bundlePool);
-        return NULL;
-      }
-
-      state.materialBlock = blockIndex;
-      state.materialBlocks.length++;
+  for (MaterialBlock* node = state.materials; node != NULL; node = node->next) {
+    if (node->head != ~0u && gpu_is_complete(node->materials[node->head].tick)) {
+      block = node;
+      break;
     }
   }
 
-  Material* material = &block->list[block->head];
+  if (!block) {
+    const uint32_t count = 256;
+    block = lovrMalloc(sizeof(*block));
+    block->materials = lovrMalloc(count * sizeof(Material));
+    block->bundlePool = lovrMalloc(gpu_sizeof_bundle_pool());
+    block->bundles = lovrMalloc(count * gpu_sizeof_bundle());
+
+    for (uint32_t i = 0; i < count; i++) {
+      block->materials[i] = (Material) {
+        .index = i,
+        .next = i + 1,
+        .block = block,
+        .bundle = (gpu_bundle*) ((char*) block->bundles + i * gpu_sizeof_bundle())
+      };
+    }
+
+    block->materials[count - 1].next = ~0u;
+    block->tail = count - 1;
+    block->head = 0;
+
+    gpu_bundle_pool_info poolInfo = {
+      .bundles = block->bundles,
+      .layout = state.materialLayout->gpu,
+      .count = count
+    };
+
+    if (!gpu_bundle_pool_init(block->bundlePool, &poolInfo)) {
+      lovrFree(block->materials);
+      lovrFree(block->bundlePool);
+      lovrFree(block->bundles);
+      return NULL;
+    }
+
+    size_t align = state.limits.uniformBufferAlign;
+    uint32_t bufferSize = count * (uint32_t) ALIGN(sizeof(MaterialData), align);
+    block->view = getBuffer(GPU_BUFFER_STATIC, bufferSize, align);
+
+    if (!block->view.buffer) {
+      lovrFree(block->materials);
+      lovrFree(block->bundlePool);
+      lovrFree(block->bundles);
+      gpu_bundle_pool_destroy(block->bundlePool);
+      return NULL;
+    }
+
+    block->next = state.materials;
+    state.materials = block;
+  }
+
+  Material* material = &block->materials[block->head];
   material->ref = 1;
   material->info = *info;
 
@@ -3924,10 +3918,9 @@ Material* lovrMaterialCreate(const MaterialInfo* info) {
 
 void lovrMaterialDestroy(void* ref) {
   Material* material = ref;
-  MaterialBlock* block = &state.materialBlocks.data[material->block];
   material->tick = state.tick;
-  block->tail = material->index;
-  if (block->head == ~0u) block->head = block->tail;
+  material->block->tail = material->index;
+  if (material->block->head == ~0u) material->block->head = material->block->tail;
   lovrRelease(material->info.texture, lovrTextureDestroy);
   lovrRelease(material->info.glowTexture, lovrTextureDestroy);
   lovrRelease(material->info.metalnessTexture, lovrTextureDestroy);
