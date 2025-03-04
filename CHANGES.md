@@ -4,6 +4,10 @@ Changelog
 dev
 ---
 
+### Add
+
+- Add `Blob:setI8/setU8/setI16/setU16/setI32/setU32/setF32/setF64`.
+
 ### Fix
 
 - Fix `ConvexShape` scale not working when created from a table of points.
