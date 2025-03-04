@@ -134,6 +134,7 @@ typedef struct Layout {
   gpu_layout* gpu;
   BundlePool* head;
   BundlePool* tail;
+  mtx_t lock;
 } Layout;
 
 struct Shader {
@@ -927,6 +928,7 @@ void lovrGraphicsDestroy(void) {
       pool = next;
     }
     gpu_layout_destroy(layout->gpu);
+    mtx_destroy(&layout->lock);
     Layout* next = layout->next;
     lovrFree(layout);
     layout = next;
@@ -8513,8 +8515,15 @@ static Layout* getLayout(gpu_slot* slots, uint32_t count) {
     .count = count
   };
 
+  if (mtx_init(&layout->lock, mtx_plain)) {
+    lovrSetError("Failed to create layout mutex");
+    lovrFree(layout);
+    return NULL;
+  }
+
   if (!gpu_layout_init(layout->gpu, &info)) {
     lovrSetError("Failed to create GPU layout: %s", gpu_get_error());
+    mtx_destroy(&layout->lock);
     lovrFree(layout);
     return NULL;
   }
@@ -8542,8 +8551,10 @@ static gpu_bundle* getBundle(Layout* layout, gpu_binding* bindings, uint32_t cou
 }
 
 static bool getBundles(Layout* layout, gpu_bundle** bundles, uint32_t count) {
-  const uint32_t POOL_SIZE = 512;
+  mtx_lock(&layout->lock);
+
   BundlePool* pool = layout->head;
+  const uint32_t POOL_SIZE = 512;
 
   while (count > 0) {
     if (!pool || !gpu_is_complete(pool->tick)) {
@@ -8566,6 +8577,7 @@ static bool getBundles(Layout* layout, gpu_bundle** bundles, uint32_t count) {
         lovrFree(bundles);
         lovrFree(gpu);
         lovrFree(pool);
+        mtx_unlock(&layout->lock);
         return false;
       }
 
@@ -8590,6 +8602,8 @@ static bool getBundles(Layout* layout, gpu_bundle** bundles, uint32_t count) {
       pool = layout->head;
     }
   }
+
+  mtx_unlock(&layout->lock);
 
   return true;
 }
