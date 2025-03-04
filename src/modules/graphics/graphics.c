@@ -1612,8 +1612,10 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
     };
 
     Shader* shader = lovrGraphicsGetDefaultShader(SHADER_TALLY_MERGE);
+    if (!shader) return false;
+
     gpu_bundle* bundle = getBundle(shader->layout, bindings, COUNTOF(bindings));
-    if (!shader || !bundle) return false;
+    if (!bundle) return false;
 
     gpu_compute_begin(stream);
     gpu_bind_pipeline(stream, shader->computePipeline, GPU_PIPELINE_COMPUTE);
@@ -3257,6 +3259,10 @@ Shader* lovrGraphicsGetDefaultShader(DefaultShader type) {
         .stageCount = 2,
         .isDefault = true
       });
+    }
+
+    if (!shader) {
+      return NULL;
     }
 
     Shader* expected = NULL;
