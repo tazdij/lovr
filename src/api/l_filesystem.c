@@ -507,6 +507,7 @@ static int libLoaderCommon(lua_State* L, bool allInOneFlag) {
   memcpy(p, subpath, subpathLength);
   length += subpathLength;
   p += subpathLength;
+  char* leaf = p;
 #else
   size_t length = lovrFilesystemGetExecutablePath(path, sizeof(path));
   if (length == 0) {
