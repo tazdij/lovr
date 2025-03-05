@@ -144,7 +144,8 @@ typedef struct {
   VkSurfaceKHR handle;
   VkSwapchainKHR swapchain;
   VkSurfaceCapabilitiesKHR capabilities;
-  VkSurfaceFormatKHR format;
+  VkSurfaceFormatKHR vkformat;
+  gpu_texture_format format;
   VkSemaphore semaphore;
   gpu_texture images[8];
   uint32_t imageIndex;
@@ -813,13 +814,18 @@ bool gpu_surface_init(gpu_surface_info* info) {
   vkGetPhysicalDeviceSurfaceFormatsKHR(state.adapter, surface->handle, &formatCount, formats);
 
   for (uint32_t i = 0; i < formatCount; i++) {
-    if (formats[i].format == VK_FORMAT_R8G8B8A8_SRGB || formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
-      surface->format = formats[i];
+    if (formats[i].format == VK_FORMAT_R8G8B8A8_SRGB) {
+      surface->format = GPU_FORMAT_RGBA8;
+      surface->vkformat = formats[i];
+      break;
+    } else if (formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
+      surface->format = GPU_FORMAT_BGRA8;
+      surface->vkformat = formats[i];
       break;
     }
   }
 
-  ASSERT(surface->format.format != VK_FORMAT_UNDEFINED, "No supported swapchain texture format is available") {
+  ASSERT(surface->vkformat.format != VK_FORMAT_UNDEFINED, "No supported swapchain texture format is available") {
     LOG("Surface unavailable because no supported texture format is available");
     vkDestroySurfaceKHR(state.instance, surface->handle, NULL);
     return false;
@@ -832,6 +838,10 @@ bool gpu_surface_init(gpu_surface_info* info) {
 
   gpu_surface_resize(info->width, info->height);
   return true;
+}
+
+gpu_texture_format gpu_surface_get_format(void) {
+  return state.surface.format;
 }
 
 bool gpu_surface_resize(uint32_t width, uint32_t height) {
@@ -852,8 +862,8 @@ bool gpu_surface_resize(uint32_t width, uint32_t height) {
     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
     .surface = surface->handle,
     .minImageCount = surface->capabilities.minImageCount,
-    .imageFormat = surface->format.format,
-    .imageColorSpace = surface->format.colorSpace,
+    .imageFormat = surface->vkformat.format,
+    .imageColorSpace = surface->vkformat.colorSpace,
     .imageExtent = { width, height },
     .imageArrayLayers = 1,
     .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -908,8 +918,8 @@ bool gpu_surface_resize(uint32_t width, uint32_t height) {
     texture->memory = NULL;
     texture->samples = 1;
     texture->layers = 1;
-    texture->format = GPU_FORMAT_SURFACE;
-    texture->srgb = true;
+    texture->format = surface->format;
+    texture->srgb = surface->vkformat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
     gpu_texture_view_info view = {
       .source = texture,
@@ -3448,6 +3458,7 @@ static VkFormat convertFormat(gpu_texture_format format, int colorspace) {
     [GPU_FORMAT_R8] = { VK_FORMAT_R8_UNORM, VK_FORMAT_R8_SRGB },
     [GPU_FORMAT_RG8] = { VK_FORMAT_R8G8_UNORM, VK_FORMAT_R8G8_SRGB },
     [GPU_FORMAT_RGBA8] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB },
+    [GPU_FORMAT_BGRA8] = { VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_SRGB },
     [GPU_FORMAT_R16] = { VK_FORMAT_R16_UNORM, VK_FORMAT_R16_UNORM },
     [GPU_FORMAT_RG16] = { VK_FORMAT_R16G16_UNORM, VK_FORMAT_R16G16_UNORM },
     [GPU_FORMAT_RGBA16] = { VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_UNORM },
@@ -3491,10 +3502,6 @@ static VkFormat convertFormat(gpu_texture_format format, int colorspace) {
     [GPU_FORMAT_ASTC_12x10] = { VK_FORMAT_ASTC_12x10_UNORM_BLOCK, VK_FORMAT_ASTC_12x10_SRGB_BLOCK },
     [GPU_FORMAT_ASTC_12x12] = { VK_FORMAT_ASTC_12x12_UNORM_BLOCK, VK_FORMAT_ASTC_12x12_SRGB_BLOCK }
   };
-
-  if (format == GPU_FORMAT_SURFACE) {
-    return state.surface.format.format;
-  }
 
   return formats[format][colorspace];
 }

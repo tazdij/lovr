@@ -69,6 +69,7 @@ typedef enum {
   GPU_FORMAT_R8,
   GPU_FORMAT_RG8,
   GPU_FORMAT_RGBA8,
+  GPU_FORMAT_BGRA8,
   GPU_FORMAT_R16,
   GPU_FORMAT_RG16,
   GPU_FORMAT_RGBA16,
@@ -111,8 +112,7 @@ typedef enum {
   GPU_FORMAT_ASTC_10x10,
   GPU_FORMAT_ASTC_12x10,
   GPU_FORMAT_ASTC_12x12,
-  GPU_FORMAT_COUNT,
-  GPU_FORMAT_SURFACE = 0xff
+  GPU_FORMAT_COUNT
 } gpu_texture_format;
 
 enum {
@@ -179,6 +179,7 @@ typedef struct {
 } gpu_surface_info;
 
 bool gpu_surface_init(gpu_surface_info* info);
+gpu_texture_format gpu_surface_get_format(void);
 bool gpu_surface_resize(uint32_t width, uint32_t height);
 bool gpu_surface_acquire(gpu_texture** texture);
 bool gpu_surface_present(void);

@@ -935,6 +935,7 @@ bool gpu_init(gpu_config* config) {
     config->features->formats[GPU_FORMAT_R8][0] = GPU_FEATURE_SAMPLE | GPU_FEATURE_RENDER;
     config->features->formats[GPU_FORMAT_RG8][0] = GPU_FEATURE_SAMPLE | GPU_FEATURE_RENDER;
     config->features->formats[GPU_FORMAT_RGBA8][0] = GPU_FEATURE_SAMPLE | GPU_FEATURE_RENDER | GPU_FEATURE_STORAGE;
+    config->features->formats[GPU_FORMAT_BGRA8][0] = GPU_FEATURE_SAMPLE | GPU_FEATURE_RENDER;
     config->features->formats[GPU_FORMAT_R16][0] = 0;
     config->features->formats[GPU_FORMAT_RG16][0] = 0;
     config->features->formats[GPU_FORMAT_RGBA16][0] = 0;
@@ -983,6 +984,7 @@ bool gpu_init(gpu_config* config) {
     }
 
     config->features->formats[GPU_FORMAT_RGBA8][1] = GPU_FEATURE_SAMPLE | GPU_FEATURE_RENDER;
+    config->features->formats[GPU_FORMAT_BGRA8][1] = GPU_FEATURE_SAMPLE | GPU_FEATURE_RENDER;
   }
 
   if (config->limits) {
@@ -1081,6 +1083,7 @@ static WGPUTextureFormat convertFormat(gpu_texture_format format, bool srgb) {
     [GPU_FORMAT_R8] = { WGPUTextureFormat_R8Unorm, WGPUTextureFormat_R8Unorm },
     [GPU_FORMAT_RG8] = { WGPUTextureFormat_RG8Unorm, WGPUTextureFormat_RG8Unorm },
     [GPU_FORMAT_RGBA8] = { WGPUTextureFormat_RGBA8Unorm, WGPUTextureFormat_RGBA8UnormSrgb },
+    [GPU_FORMAT_BGRA8] = { WGPUTextureFormat_BGAR8Unorm, WGPUTextureFormat_BGRA8UnormSrgb },
     [GPU_FORMAT_R16] = { WGPUTextureFormat_Undefined, WGPUTextureFormat_Undefined },
     [GPU_FORMAT_RG16] = { WGPUTextureFormat_Undefined, WGPUTextureFormat_Undefined },
     [GPU_FORMAT_RGBA16] = { WGPUTextureFormat_Undefined, WGPUTextureFormat_Undefined },

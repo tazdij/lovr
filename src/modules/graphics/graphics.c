@@ -2242,7 +2242,6 @@ bool lovrGraphicsGetWindowTexture(Texture** texture) {
     state.window->renderView = NULL;
     state.window->info = (TextureInfo) {
       .type = TEXTURE_2D,
-      .format = GPU_FORMAT_SURFACE,
       .width = width,
       .height = height,
       .layers = 1,
@@ -2278,6 +2277,8 @@ bool lovrGraphicsGetWindowTexture(Texture** texture) {
       lovrFree(state.window);
       return lovrSetError("Failed to create window surface: %s", gpu_get_error());
     }
+
+    state.window->info.format = gpu_surface_get_format();
 
     os_on_resize(onResize);
 
@@ -6014,9 +6015,8 @@ bool lovrPassSetCanvas(Pass* pass, Canvas* canvas) {
 
   for (uint32_t i = 0; i < 4 && color[i].texture; i++) {
     const TextureInfo* info = &color[i].texture->info;
-    bool renderable = info->format == GPU_FORMAT_SURFACE || (state.features.formats[info->format][info->srgb] & GPU_FEATURE_RENDER);
     lovrCheck(!isDepthFormat(info->format), "Unable to use a depth texture as a color texture in a canvas");
-    lovrCheck(renderable, "This GPU does not support rendering to the texture format/encoding used by canvas texture #%d", i + 1);
+    lovrCheck(state.features.formats[info->format][info->srgb] & GPU_FEATURE_RENDER, "This GPU does not support rendering to the texture format/encoding used by canvas texture #%d", i + 1);
     lovrCheck(info->usage & TEXTURE_RENDER, "Texture must be created with the 'render' usage to render to it");
     lovrCheck(info->width == texture->width, "Canvas texture sizes must match");
     lovrCheck(info->height == texture->height, "Canvas texture sizes must match");
