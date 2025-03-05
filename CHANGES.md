@@ -9,6 +9,10 @@ dev
 - Add `Blob:setI8/setU8/setI16/setU16/setI32/setU32/setF32/setF64`.
 - Add `bgra8` TextureFormat.
 
+### Change
+
+- Change `require` to have better errors when files/plugins aren't found.
+
 ### Fix
 
 - Fix `ConvexShape` scale not working when created from a table of points.
