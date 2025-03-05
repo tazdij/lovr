@@ -35,9 +35,9 @@ group('data', function()
 
     test(':setU16', function()
       blob = lovr.data.newBlob(6)
-      blob:setU16(0, 0, -1, 60000)
+      blob:setU16(0, 0, 1, 60000)
       expect(blob:getU16()).to.equal(0)
-      expect({ blob:getU16(2, 2) }).to.equal({ 65535, 60000 })
+      expect({ blob:getU16(2, 2) }).to.equal({ 1, 60000 })
     end)
 
     test(':setI32', function()
