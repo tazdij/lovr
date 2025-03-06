@@ -111,6 +111,7 @@ function lovr.boot()
     ok, failure = false, ('No %s file found%s.\nThe project may be packaged incorrectly.'):format(main, location)
   else
     lovr.filesystem.setSource(source)
+    if source ~= bundle then lovr.filesystem.unmount(bundle) end
     if lovr.filesystem.isFile('conf.lua') then ok, failure = pcall(require, 'conf') end
     if ok and lovr.conf then ok, failure = pcall(lovr.conf, conf) end
   end
