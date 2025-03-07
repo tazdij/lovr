@@ -325,7 +325,8 @@ static int l_lovrGraphicsInitialize(lua_State* L) {
     .debug = false,
     .vsync = false,
     .stencil = false,
-    .antialias = true
+    .antialias = true,
+    .hdr = false
   };
 
   bool shaderCache = true;
@@ -347,6 +348,10 @@ static int l_lovrGraphicsInitialize(lua_State* L) {
 
     lua_getfield(L, -1, "antialias");
     config.antialias = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "hdr");
+    config.hdr = lua_toboolean(L, -1);
     lua_pop(L, 1);
 
     lua_getfield(L, -1, "shadercache");
@@ -529,6 +534,12 @@ static int l_lovrGraphicsIsFormatSupported(lua_State* L) {
   lua_pushboolean(L, support & (1 << 0)); // linear
   lua_pushboolean(L, support & (1 << 1)); // srgb
   return 2;
+}
+
+static int l_lovrGraphicsIsHDR(lua_State* L) {
+  bool hdr = lovrGraphicsIsHDR();
+  lua_pushboolean(L, hdr);
+  return 1;
 }
 
 static int l_lovrGraphicsGetBackgroundColor(lua_State* L) {
@@ -1541,6 +1552,7 @@ static const luaL_Reg lovrGraphics[] = {
   { "getFeatures", l_lovrGraphicsGetFeatures },
   { "getLimits", l_lovrGraphicsGetLimits },
   { "isFormatSupported", l_lovrGraphicsIsFormatSupported },
+  { "isHDR", l_lovrGraphicsIsHDR },
   { "getBackgroundColor", l_lovrGraphicsGetBackgroundColor },
   { "setBackgroundColor", l_lovrGraphicsSetBackgroundColor },
   { "getWindowPass", l_lovrGraphicsGetWindowPass },

@@ -27,6 +27,7 @@ local conf = {
     vsync = true,
     stencil = false,
     antialias = true,
+    hdr = false,
     shadercache = true
   },
   headset = {
