@@ -2716,105 +2716,75 @@ bool gpu_init(gpu_config* config) {
 
     // Features
 
-    VkPhysicalDeviceFragmentDensityMapFeaturesEXT fragmentDensityMapFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT
-    };
+    VkPhysicalDeviceFeatures2 supported = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    VkPhysicalDeviceMultiviewFeatures multiviewFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES };
+    VkPhysicalDeviceShaderDrawParameterFeatures shaderDrawParameterFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETER_FEATURES };
+    VkPhysicalDeviceSynchronization2FeaturesKHR synchronization2Features = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR };
+    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR };
+    VkPhysicalDeviceScalarBlockLayoutFeaturesEXT scalarBlockLayoutFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES_EXT };
+    VkPhysicalDeviceFragmentDensityMapFeaturesEXT fragmentDensityMapFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
 
-    VkPhysicalDeviceScalarBlockLayoutFeaturesEXT scalarBlockLayoutFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES_EXT
-    };
+    vkGetPhysicalDeviceFeatures2(state.adapter, &supported);
 
-    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR
-    };
+    VkPhysicalDeviceFeatures2 enabled = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    #define CHAIN(x) x.pNext = enabled.pNext; enabled.pNext = &x
 
-    VkPhysicalDeviceSynchronization2FeaturesKHR synchronization2Features = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR
-    };
+    enabled.features.fullDrawIndexUint32 = true;
+    enabled.features.imageCubeArray = true;
+    enabled.features.independentBlend = true;
+    enabled.features.sampleRateShading = true;
+    enabled.features.samplerAnisotropy = supported.features.samplerAnisotropy;
+    enabled.features.multiDrawIndirect = supported.features.multiDrawIndirect;
+    enabled.features.shaderClipDistance = supported.features.shaderClipDistance;
+    enabled.features.shaderCullDistance = supported.features.shaderCullDistance;
+    enabled.features.largePoints = supported.features.largePoints;
+    enabled.features.textureCompressionBC = supported.features.textureCompressionBC;
+    enabled.features.textureCompressionASTC_LDR = supported.features.textureCompressionASTC_LDR;
+    enabled.features.fillModeNonSolid = supported.features.fillModeNonSolid;
+    enabled.features.depthClamp = supported.features.depthClamp;
+    enabled.features.drawIndirectFirstInstance = supported.features.drawIndirectFirstInstance;
+    enabled.features.shaderFloat64 = supported.features.shaderFloat64;
+    enabled.features.shaderInt64 = supported.features.shaderInt64;
+    enabled.features.shaderInt16 = supported.features.shaderInt16;
 
-    VkPhysicalDeviceShaderDrawParameterFeatures shaderDrawParameterFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETER_FEATURES,
-      .pNext = &synchronization2Features
-    };
+    multiviewFeatures.multiview = true;
+    CHAIN(multiviewFeatures);
 
-    VkPhysicalDeviceMultiviewFeatures multiviewFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES,
-      .pNext = &shaderDrawParameterFeatures
-    };
+    shaderDrawParameterFeatures.shaderDrawParameters = true;
+    CHAIN(shaderDrawParameterFeatures);
 
-    VkPhysicalDeviceFeatures2 enabledFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-      .pNext = &multiviewFeatures
-    };
+    synchronization2Features.synchronization2 = true;
+    CHAIN(synchronization2Features);
+
+    if (state.extensions.dynamicRendering) {
+      dynamicRenderingFeatures.dynamicRendering = true;
+      CHAIN(dynamicRenderingFeatures);
+    }
+
+    if (state.extensions.scalarBlockLayout) {
+      scalarBlockLayoutFeatures.scalarBlockLayout = true;
+      CHAIN(scalarBlockLayoutFeatures);
+    }
+
+    if (state.extensions.foveation) {
+      fragmentDensityMapFeatures.fragmentDensityMap = true;
+      fragmentDensityMapFeatures.fragmentDensityMapNonSubsampledImages = true;
+      CHAIN(fragmentDensityMapFeatures);
+    }
 
     if (config->features) {
-      VkPhysicalDeviceFeatures2 features2 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
-      VkPhysicalDeviceFeatures* enable = &enabledFeatures.features;
-      VkPhysicalDeviceFeatures* supports = &features2.features;
-
-      if (state.extensions.foveation) {
-        fragmentDensityMapFeatures.pNext = features2.pNext;
-        features2.pNext = &fragmentDensityMapFeatures;
-      }
-
-      if (state.extensions.dynamicRendering) {
-        dynamicRenderingFeatures.pNext = features2.pNext;
-        features2.pNext = &dynamicRenderingFeatures;
-      }
-
-      vkGetPhysicalDeviceFeatures2(state.adapter, &features2);
-
-      // Required features
-      enable->fullDrawIndexUint32 = true;
-      enable->imageCubeArray = true;
-      enable->independentBlend = true;
-      enable->sampleRateShading = true;
-      synchronization2Features.synchronization2 = true;
-      multiviewFeatures.multiview = true;
-      shaderDrawParameterFeatures.shaderDrawParameters = true;
-
-      // Internal features (exposed as limits)
-      enable->samplerAnisotropy = supports->samplerAnisotropy;
-      enable->multiDrawIndirect = supports->multiDrawIndirect;
-      enable->shaderClipDistance = supports->shaderClipDistance;
-      enable->shaderCullDistance = supports->shaderCullDistance;
-      enable->largePoints = supports->largePoints;
-
-      // Optional features (currently always enabled when supported)
-      config->features->textureBC = (enable->textureCompressionBC = supports->textureCompressionBC);
-      config->features->textureASTC = (enable->textureCompressionASTC_LDR = supports->textureCompressionASTC_LDR);
-      config->features->wireframe = (enable->fillModeNonSolid = supports->fillModeNonSolid);
-      config->features->depthClamp = (enable->depthClamp = supports->depthClamp);
-      config->features->indirectDrawFirstInstance = (enable->drawIndirectFirstInstance = supports->drawIndirectFirstInstance);
-      config->features->float64 = (enable->shaderFloat64 = supports->shaderFloat64);
-      config->features->int64 = (enable->shaderInt64 = supports->shaderInt64);
-      config->features->int16 = (enable->shaderInt16 = supports->shaderInt16);
-
-      // Extension "features"
+      config->features->textureBC = enabled.features.textureCompressionBC;
+      config->features->textureASTC = enabled.features.textureCompressionASTC_LDR;
+      config->features->wireframe = enabled.features.fillModeNonSolid;
+      config->features->depthClamp = enabled.features.depthClamp;
       config->features->depthResolve = state.extensions.depthResolve;
+      config->features->foveation = state.extensions.foveation;
+      config->features->indirectDrawFirstInstance = enabled.features.drawIndirectFirstInstance;
       config->features->packedBuffers = state.extensions.scalarBlockLayout;
       config->features->shaderDebug = state.extensions.shaderDebug;
-
-      if (state.extensions.scalarBlockLayout) {
-        scalarBlockLayoutFeatures.scalarBlockLayout = true;
-        scalarBlockLayoutFeatures.pNext = enabledFeatures.pNext;
-        enabledFeatures.pNext = &scalarBlockLayoutFeatures;
-      }
-
-      if (state.extensions.foveation && fragmentDensityMapFeatures.fragmentDensityMap) {
-        fragmentDensityMapFeatures.fragmentDensityMapDynamic = false;
-        fragmentDensityMapFeatures.fragmentDensityMapNonSubsampledImages = true;
-        fragmentDensityMapFeatures.pNext = enabledFeatures.pNext;
-        enabledFeatures.pNext = &fragmentDensityMapFeatures;
-        config->features->foveation = true;
-      }
-
-      if (state.extensions.dynamicRendering && dynamicRenderingFeatures.dynamicRendering) {
-        dynamicRenderingFeatures.pNext = enabledFeatures.pNext;
-        enabledFeatures.pNext = &dynamicRenderingFeatures;
-      } else {
-        state.extensions.dynamicRendering = false;
-      }
+      config->features->float64 = enabled.features.shaderFloat64;
+      config->features->int64 = enabled.features.shaderInt64;
+      config->features->int16 = enabled.features.shaderInt16;
 
       // Formats
       for (uint32_t i = 0; i < GPU_FORMAT_COUNT; i++) {
@@ -2875,7 +2845,7 @@ bool gpu_init(gpu_config* config) {
 
     VkDeviceCreateInfo deviceInfo = {
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-      .pNext = config->features ? &enabledFeatures : NULL,
+      .pNext = &enabled,
       .queueCreateInfoCount = 1,
       .pQueueCreateInfos = &(VkDeviceQueueCreateInfo) {
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
