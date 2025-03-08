@@ -1123,7 +1123,7 @@ static bool openxr_init(HeadsetConfig* config) {
   };
 
   XrActionCreateInfo actionInfo[] = {
-    { 0, NULL },
+    { 0 },
     { 0, NULL, "grip_pose",        XR_ACTION_TYPE_POSE_INPUT,       2, hands, "Grip Pose" },
     { 0, NULL, "pointer_pose",     XR_ACTION_TYPE_POSE_INPUT,       2, hands, "Pointer Pose" },
     { 0, NULL, "pinch_pose",       XR_ACTION_TYPE_POSE_INPUT,       2, hands, "Pinch Pose" },
@@ -3102,7 +3102,7 @@ static Texture* openxr_setBackground(uint32_t width, uint32_t height, uint32_t l
     state.background.equirect2 = (XrCompositionLayerEquirect2KHR) {
       .type = XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR,
       .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
-      .subImage = { swapchain->handle, { 0, 0, width, height }, 0 },
+      .subImage = { swapchain->handle, { { 0, 0 }, { width, height } }, 0 },
       .pose.orientation.w = 1.f,
       .centralHorizontalAngle = 2.f * (float) M_PI,
       .upperVerticalAngle = (float) M_PI * .5f,
@@ -3112,7 +3112,7 @@ static Texture* openxr_setBackground(uint32_t width, uint32_t height, uint32_t l
     state.background.equirect = (XrCompositionLayerEquirectKHR) {
       .type = XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR,
       .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
-      .subImage = { swapchain->handle, { 0, 0, width, height }, 0 },
+      .subImage = { swapchain->handle, { { 0, 0 }, { width, height } }, 0 },
       .pose.orientation.w = 1.f,
       .scale = { 1.f, 1.f }
     };
@@ -3137,7 +3137,7 @@ static Layer* openxr_newLayer(const LayerInfo* info) {
     .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
     .layerFlags = info->transparent ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0,
     .eyeVisibility = info->stereo ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_BOTH,
-    .subImage = { layer->swapchain.handle, { 0, 0, info->width, info->height }, 0 },
+    .subImage = { layer->swapchain.handle, { { 0, 0 }, { info->width, info->height } }, 0 },
     .pose.orientation.w = 1.f,
     .size = { 1.f, 1.f }
   };
