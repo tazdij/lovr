@@ -813,15 +813,29 @@ bool gpu_surface_init(gpu_surface_info* info) {
   uint32_t formatCount = COUNTOF(formats);
   vkGetPhysicalDeviceSurfaceFormatsKHR(state.adapter, surface->handle, &formatCount, formats);
 
-  for (uint32_t i = 0; i < formatCount; i++) {
-    if (formats[i].format == VK_FORMAT_R8G8B8A8_SRGB) {
-      surface->format = GPU_FORMAT_RGBA8;
-      surface->vkformat = formats[i];
-      break;
-    } else if (formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
-      surface->format = GPU_FORMAT_BGRA8;
-      surface->vkformat = formats[i];
-      break;
+  surface->vkformat.format = VK_FORMAT_UNDEFINED;
+
+  if (info->hdr && state.extensions.colorspace) {
+    for (uint32_t i = 0; i < formatCount; i++) {
+      if (formats[i].format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 && formats[i].colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
+        surface->format = GPU_FORMAT_RGB10A2;
+        surface->vkformat = formats[i];
+        break;
+      }
+    }
+  }
+
+  if (!surface->vkformat.format) {
+    for (uint32_t i = 0; i < formatCount; i++) {
+      if (formats[i].format == VK_FORMAT_R8G8B8A8_SRGB) {
+        surface->format = GPU_FORMAT_RGBA8;
+        surface->vkformat = formats[i];
+        break;
+      } else if (formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
+        surface->format = GPU_FORMAT_BGRA8;
+        surface->vkformat = formats[i];
+        break;
+      }
     }
   }
 
@@ -842,6 +856,10 @@ bool gpu_surface_init(gpu_surface_info* info) {
 
 gpu_texture_format gpu_surface_get_format(void) {
   return state.surface.format;
+}
+
+bool gpu_surface_is_hdr(void) {
+  return state.surface.vkformat.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 && state.surface.vkformat.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT;
 }
 
 bool gpu_surface_resize(uint32_t width, uint32_t height) {

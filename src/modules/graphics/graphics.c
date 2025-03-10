@@ -1024,6 +1024,11 @@ void lovrGraphicsGetShaderCache(void* data, size_t* size) {
   gpu_pipeline_get_cache(data, size);
 }
 
+bool lovrGraphicsIsHDR(void) {
+  Texture* texture = NULL;
+  return lovrGraphicsGetWindowTexture(&texture) && gpu_surface_is_hdr();
+}
+
 void lovrGraphicsGetBackgroundColor(float background[4]) {
   background[0] = lovrMathLinearToGamma(state.background[0]);
   background[1] = lovrMathLinearToGamma(state.background[1]);
@@ -2262,6 +2267,7 @@ bool lovrGraphicsGetWindowTexture(Texture** texture) {
       .width = width,
       .height = height,
       .vsync = vsync,
+      .hdr = state.config.hdr,
 #if defined(_WIN32)
       .win32.window = os_get_win32_window(),
       .win32.instance = os_get_win32_instance()

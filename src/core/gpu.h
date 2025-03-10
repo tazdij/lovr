@@ -163,6 +163,7 @@ typedef struct {
   uint32_t width;
   uint32_t height;
   bool vsync;
+  bool hdr;
   union {
     struct {
       uintptr_t window;
@@ -180,6 +181,7 @@ typedef struct {
 
 bool gpu_surface_init(gpu_surface_info* info);
 gpu_texture_format gpu_surface_get_format(void);
+bool gpu_surface_is_hdr(void);
 bool gpu_surface_resize(uint32_t width, uint32_t height);
 bool gpu_surface_acquire(gpu_texture** texture);
 bool gpu_surface_present(void);
