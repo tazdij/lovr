@@ -8,6 +8,8 @@ dev
 
 - Add `Blob:setI8/setU8/setI16/setU16/setI32/setU32/setF32/setF64`.
 - Add `bgra8` TextureFormat.
+- Add `t.graphics.hdr` and `lovr.graphics.isHDR`.
+- Add `pqToLinear`, `linearToPQ`, `sRGBToRec2020`, and `rec2020ToSRGB` shader helpers.
 
 ### Change
 
@@ -18,6 +20,7 @@ dev
 - Fix `ConvexShape` scale not working when created from a table of points.
 - Fix `ConvexShape:getPoint` to apply the shape's center of mass and scale.
 - Fix memory leak with `ConvexShape` and `MeshShape`.
+- Fix issue where OBJ models loaded without materials would have inverted UVs.
 
 v0.18.0 - 2025-02-14
 ---
