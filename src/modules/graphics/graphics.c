@@ -7,6 +7,7 @@
 #include "headset/headset.h"
 #include "math/math.h"
 #include "core/gpu.h"
+#include "core/job.h"
 #include "core/maf.h"
 #include "core/spv.h"
 #include "core/os.h"
@@ -554,9 +555,11 @@ struct Pass {
 
 typedef struct PipelineJob {
   struct PipelineJob* next;
+  job* handle;
   uint64_t hash;
   gpu_pipeline_info* info;
   gpu_pipeline* pipeline;
+  char* error;
 } PipelineJob;
 
 static thread_local struct {
@@ -595,7 +598,7 @@ static struct {
   Readback* newestReadback;
   MaterialBlock* materials;
   BufferAllocator bufferAllocators[4];
-  PipelineJob* pipelineJobs;
+  PipelineJob* newPipelines;
   map_t pipelineLookup;
   gpu_pipeline* pipelines;
   uint32_t pipelineCount;
@@ -1120,11 +1123,98 @@ static bool recordComputePass(Pass* pass, gpu_stream* stream) {
   return true;
 }
 
+static void compilePipeline(void* arg) {
+  PipelineJob* job = arg;
+  if (!gpu_pipeline_init_graphics(job->pipeline, job->info, NULL)) {
+    const char* error = gpu_get_error();
+    size_t length = strlen(error);
+    job->error = lovrMalloc(length + 1);
+    memcpy(job->error, error, length + 1);
+  }
+}
+
 static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
   Canvas* canvas = &pass->canvas;
 
   if (!canvas->color->texture && !canvas->depth.texture) {
     return true;
+  }
+
+  // Pipelines
+
+  Draw* draw = pass->draws;
+  Draw* previous = NULL;
+
+  // List of pipeline jobs offloaded to worker threads (we must wait for them before doing draws)
+  PipelineJob* pipelineJobs = NULL;
+
+  for (uint32_t i = 0; i < pass->drawCount; i++, previous = draw, draw++) {
+    // If the draw uses the same pipeline as the previous draw, use that
+    if (previous && draw->pipelineInfo == previous->pipelineInfo) {
+      draw->pipeline = previous->pipeline;
+      continue;
+    }
+
+    // Otherwise, look up the pipeline in the global lookup table
+    uint64_t hash = hash64(draw->pipelineInfo, sizeof(gpu_pipeline_info));
+    uint64_t value = map_get(&state.pipelineLookup, hash);
+
+    if (value != MAP_NIL) {
+      draw->pipeline = (gpu_pipeline*) (uintptr_t) value;
+      continue;
+    }
+
+    // If it's not in the global lookup, search through the linked list of new pipelines
+    PipelineJob* node = atomic_load(&state.newPipelines);
+    bool found = false;
+
+    while (node) {
+      if (node->hash == hash) {
+        draw->pipeline = node->pipeline;
+        found = true;
+        break;
+      } else {
+        node = node->next;
+      }
+    }
+
+    if (found) {
+      continue;
+    }
+
+    // If we couldn't find a pipeline to use, compile a new one
+    uint32_t index = atomic_fetch_add(&state.pipelineCount, 1);
+
+    if (index >= MAX_PIPELINES) {
+      lovrSetError("Too many pipelines!");
+      return false;
+    }
+
+    PipelineJob* job = allocate(&thread.stack, sizeof(PipelineJob));
+    job->next = NULL;
+    job->handle = NULL;
+    job->hash = hash;
+    job->info = draw->pipelineInfo;
+    job->pipeline = getPipeline(index);
+    job->error = NULL;
+
+    bool slow;
+    lovrAssert(gpu_pipeline_init_graphics(job->pipeline, job->info, &slow), "Failed to create GPU pipeline: %s", gpu_get_error());
+
+    if (slow) {
+      // The pipeline is going to be slow to compile, offload it to a worker thread
+      job->handle = job_start(compilePipeline, job);
+      job->next = pipelineJobs;
+      pipelineJobs = job;
+    } else {
+      // Chain the new pipeline on to the list of new pipelines
+      job->next = atomic_load(&state.newPipelines);
+      while (!atomic_compare_exchange_strong(&state.newPipelines, &job->next, job)) {
+        continue;
+      }
+    }
+
+    draw->pipeline = job->pipeline;
   }
 
   // Render area
@@ -1315,70 +1405,6 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
   gpu_bundle* builtinBundle = getBundle(state.builtinLayout, builtins, COUNTOF(builtins));
   if (!builtinBundle) return false;
 
-  // Pipelines
-
-  Draw* draw = pass->draws;
-  Draw* previous = NULL;
-
-  for (uint32_t i = 0; i < pass->drawCount; i++, previous = draw, draw++) {
-    // If the draw uses the same pipeline as the previous draw, use that
-    if (previous && draw->pipelineInfo == previous->pipelineInfo) {
-      draw->pipeline = previous->pipeline;
-      continue;
-    }
-
-    // Otherwise, look up the pipeline in the global lookup table
-    uint64_t hash = hash64(draw->pipelineInfo, sizeof(gpu_pipeline_info));
-    uint64_t value = map_get(&state.pipelineLookup, hash);
-
-    if (value != MAP_NIL) {
-      draw->pipeline = (gpu_pipeline*) (uintptr_t) value;
-      continue;
-    }
-
-    // If it's not in the global lookup, search through the linked list of new pipelines
-    PipelineJob* node = atomic_load(&state.pipelineJobs);
-    bool found = false;
-
-    while (node) {
-      if (node->hash == hash) {
-        draw->pipeline = node->pipeline;
-        found = true;
-        break;
-      } else {
-        node = node->next;
-      }
-    }
-
-    if (found) {
-      continue;
-    }
-
-    // If we couldn't find a pipeline to use, compile a new one
-    uint32_t index = atomic_fetch_add(&state.pipelineCount, 1);
-
-    if (index >= MAX_PIPELINES) {
-      lovrSetError("Too many pipelines!");
-      return false;
-    }
-
-    PipelineJob* job = allocate(&thread.stack, sizeof(PipelineJob));
-    job->next = NULL;
-    job->hash = hash;
-    job->info = draw->pipelineInfo;
-    job->pipeline = getPipeline(index);
-
-    lovrAssert(gpu_pipeline_init_graphics(job->pipeline, job->info, NULL), "Failed to create GPU pipeline: %s", gpu_get_error());
-
-    // Chain the new pipeline on to the list of new pipelines
-    job->next = atomic_load(&state.pipelineJobs);
-    while (!atomic_compare_exchange_strong(&state.pipelineJobs, &job->next, job)) {
-      continue;
-    }
-
-    draw->pipeline = job->pipeline;
-  }
-
   // Bundles
 
   Draw* prev = NULL;
@@ -1450,6 +1476,32 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
 
   gpu_render_begin(stream, &pass->target);
   gpu_bind_vertex_buffers(stream, &state.defaultBuffer->gpu, &state.defaultBuffer->base, 1, 1);
+
+  bool hasError = false;
+
+  // Wait for any in-progress pipeline jobs to finish
+  while (pipelineJobs) {
+    PipelineJob* job = pipelineJobs;
+    job_wait(job->handle);
+
+    if (job->error) {
+      if (!hasError) {
+        lovrSetError("Failed to compile GPU pipeline: %s", job->error);
+        hasError = true;
+      }
+      lovrFree(job->error);
+    }
+
+    pipelineJobs = job->next;
+    job->next = atomic_load(&state.newPipelines);
+    while (!atomic_compare_exchange_strong(&state.newPipelines, &job->next, job)) {
+      continue;
+    }
+  }
+
+  if (hasError) {
+    return false;
+  }
 
   for (uint32_t i = 0; i < activeDrawCount; i++) {
     Draw* draw = &pass->draws[activeDraws[i]];
@@ -1889,13 +1941,13 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
     }
 
     // Merge any new pipelines into the global pipeline lookup
-    for (PipelineJob* job = atomic_load(&state.pipelineJobs); job; job = job->next) {
+    for (PipelineJob* job = atomic_load(&state.newPipelines); job; job = job->next) {
       if (map_get(&state.pipelineLookup, job->hash) == MAP_NIL) {
         map_set(&state.pipelineLookup, job->hash, (uint64_t) (uintptr_t) job->pipeline);
       }
     }
 
-    atomic_store(&state.pipelineJobs, NULL);
+    atomic_store(&state.newPipelines, NULL);
   }
 
   lovrAssertGoto(fail, gpu_submit(streams, streamCount), "Failed to submit GPU command buffers: %s", gpu_get_error());
@@ -1924,7 +1976,7 @@ bool lovrGraphicsSubmit(Pass** passes, uint32_t count) {
   return true;
 fail:
   stackPop(&thread.stack, stack);
-  atomic_store(&state.pipelineJobs, NULL);
+  atomic_store(&state.newPipelines, NULL);
   return false;
 }
 
