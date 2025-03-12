@@ -1368,7 +1368,7 @@ static bool recordRenderPass(Pass* pass, gpu_stream* stream) {
     job->info = draw->pipelineInfo;
     job->pipeline = getPipeline(index);
 
-    lovrAssert(gpu_pipeline_init_graphics(job->pipeline, job->info), "Failed to create GPU pipeline: %s", gpu_get_error());
+    lovrAssert(gpu_pipeline_init_graphics(job->pipeline, job->info, NULL), "Failed to create GPU pipeline: %s", gpu_get_error());
 
     // Chain the new pipeline on to the list of new pipelines
     job->next = atomic_load(&state.pipelineJobs);

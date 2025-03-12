@@ -183,6 +183,7 @@ typedef struct {
   bool dynamicRendering;
   bool scalarBlockLayout;
   bool foveation;
+  bool pipelineCacheControl;
 } gpu_extensions;
 
 // State
@@ -1344,7 +1345,7 @@ void gpu_bundle_write(gpu_bundle** bundles, gpu_bundle_info* infos, uint32_t cou
 
 // Pipeline
 
-bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info) {
+bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info, bool* slow) {
   static const VkPrimitiveTopology topologies[] = {
     [GPU_DRAW_POINTS] = VK_PRIMITIVE_TOPOLOGY_POINT_LIST,
     [GPU_DRAW_LINES] = VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
@@ -1628,6 +1629,10 @@ bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info)
     .layout = info->shader->pipelineLayout
   };
 
+  if (state.extensions.pipelineCacheControl && slow) {
+    pipelineInfo.flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_EXT;
+  }
+
   if (state.extensions.dynamicRendering) {
     pipelineInfo.pNext = &renderingInfo;
   } else {
@@ -1699,16 +1704,19 @@ bool gpu_pipeline_init_graphics(gpu_pipeline* pipeline, gpu_pipeline_info* info)
     condemn(pipelineInfo.renderPass, VK_OBJECT_TYPE_RENDER_PASS);
   }
 
-  VK(vkCreateGraphicsPipelines(state.device, state.pipelineCache, 1, &pipelineInfo, NULL, &pipeline->handle), "vkCreateGraphicsPipelines") {
-    if (constants != stackConstants) state.config.fnFree(constants);
-    if (entries != stackEntries) state.config.fnFree(entries);
-    return false;
-  }
-
-  nickname(pipeline->handle, VK_OBJECT_TYPE_PIPELINE, info->label);
+  VkResult result = vkCreateGraphicsPipelines(state.device, state.pipelineCache, 1, &pipelineInfo, NULL, &pipeline->handle);
   if (constants != stackConstants) state.config.fnFree(constants);
   if (entries != stackEntries) state.config.fnFree(entries);
-  return true;
+
+  if (result < 0) {
+    return false;
+  } else if (result == VK_PIPELINE_COMPILE_REQUIRED_EXT) {
+    *slow = true;
+    return true;
+  } else {
+    if (slow) *slow = false;
+    return true;
+  }
 }
 
 bool gpu_pipeline_init_compute(gpu_pipeline* pipeline, gpu_compute_pipeline_info* info) {
@@ -2649,7 +2657,8 @@ bool gpu_init(gpu_config* config) {
       { "VK_KHR_synchronization2", true, &state.extensions.synchronization2 },
       { "VK_KHR_dynamic_rendering", true, &state.extensions.dynamicRendering },
       { "VK_EXT_scalar_block_layout", true, &state.extensions.scalarBlockLayout },
-      { "VK_EXT_fragment_density_map", true, &state.extensions.foveation }
+      { "VK_EXT_fragment_density_map", true, &state.extensions.foveation },
+      { "VK_EXT_pipeline_creation_cache_control", true, &state.extensions.pipelineCacheControl }
     };
 
     uint32_t extensionCount = 0;
@@ -2741,6 +2750,7 @@ bool gpu_init(gpu_config* config) {
     VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR };
     VkPhysicalDeviceScalarBlockLayoutFeaturesEXT scalarBlockLayoutFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES_EXT };
     VkPhysicalDeviceFragmentDensityMapFeaturesEXT fragmentDensityMapFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
+    VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT pipelineCreationCacheControlFeatures = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES_EXT };
 
     vkGetPhysicalDeviceFeatures2(state.adapter, &supported);
 
@@ -2788,6 +2798,11 @@ bool gpu_init(gpu_config* config) {
       fragmentDensityMapFeatures.fragmentDensityMap = true;
       fragmentDensityMapFeatures.fragmentDensityMapNonSubsampledImages = true;
       CHAIN(fragmentDensityMapFeatures);
+    }
+
+    if (state.extensions.pipelineCacheControl) {
+      pipelineCreationCacheControlFeatures.pipelineCreationCacheControl = true;
+      CHAIN(pipelineCreationCacheControlFeatures);
     }
 
     if (config->features) {
