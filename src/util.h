@@ -27,6 +27,8 @@ void* lovrCalloc(size_t size);
 void* lovrRealloc(void* data, size_t size);
 void lovrFree(void* data);
 
+#define lovrStrdup(s) (s ? memcpy(lovrMalloc(strlen(s) + 1), s, strlen(s) + 1) : NULL)
+
 // Refcounting (to be refcounted, a struct must have a uint32_t refcount as its first field)
 void lovrRetain(void* ref);
 void lovrRelease(void* ref, void (*destructor)(void*));

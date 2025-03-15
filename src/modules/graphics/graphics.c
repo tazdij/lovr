@@ -1127,9 +1127,7 @@ static void compilePipeline(void* arg) {
   PipelineJob* job = arg;
   if (!gpu_pipeline_init_graphics(job->pipeline, job->info, NULL)) {
     const char* error = gpu_get_error();
-    size_t length = strlen(error);
-    job->error = lovrMalloc(length + 1);
-    memcpy(job->error, error, length + 1);
+    job->error = lovrStrdup(error);
   }
 }
 
@@ -2420,13 +2418,7 @@ Texture* lovrTextureCreate(const TextureInfo* info) {
   texture->info.mipmaps = mipmaps;
   texture->info.samples = samples;
   texture->info.srgb = srgb;
-
-  if (info->label) {
-    size_t size = strlen(info->label) + 1;
-    char* label = lovrMalloc(size);
-    memcpy(label, info->label, size);
-    texture->info.label = label;
-  }
+  texture->info.label = lovrStrdup(info->label);
 
   uint32_t levelCount = 0;
   uint32_t levelOffsets[16];
@@ -2609,14 +2601,7 @@ Texture* lovrTextureCreateView(Texture* parent, const TextureViewInfo* info) {
   texture->ref = 1;
   texture->gpu = (gpu_texture*) (texture + 1);
   texture->info = *base;
-
-  if (info->label) {
-    size_t size = strlen(info->label) + 1;
-    char* label = lovrMalloc(size);
-    memcpy(label, info->label, size);
-    texture->info.label = label;
-  }
-
+  texture->info.label = lovrStrdup(info->label);
   texture->root = parent->root;
   texture->baseLayer = parent->baseLayer + info->layerIndex;
   texture->baseLevel = parent->baseLevel + info->levelIndex;
@@ -3346,13 +3331,7 @@ Shader* lovrShaderCreate(const ShaderInfo* info) {
   shader->ref = 1;
   shader->gpu = (gpu_shader*) (shader + 1);
   shader->info = *info;
-
-  if (info->label) {
-    size_t size = strlen(info->label) + 1;
-    char* label = lovrMalloc(size);
-    memcpy(label, info->label, size);
-    shader->info.label = label;
-  }
+  shader->info.label = lovrStrdup(info->label);
 
   // Validate stage combinations
   for (uint32_t i = 0; i < info->stageCount; i++) {

@@ -344,10 +344,8 @@ World* lovrWorldCreate(WorldInfo* info) {
   world->tagCount = info->tagCount;
   world->staticTagMask = info->staticTagMask;
   for (uint32_t i = 0; i < world->tagCount; i++) {
-    size_t length = strlen(info->tags[i]);
-    world->tags[i] = lovrMalloc(length + 1);
-    memcpy(world->tags[i], info->tags[i], length + 1);
-    world->tagLookup[i] = (uint32_t) hash64(info->tags[i], length);
+    world->tags[i] = lovrStrdup(info->tags[i]);
+    world->tagLookup[i] = (uint32_t) hash64(info->tags[i], strlen(info->tags[i]));
   }
 
   uint32_t broadPhaseLayerCount = world->staticTagMask ? 2 : 1;
